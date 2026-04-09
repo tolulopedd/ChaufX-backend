@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "DriveMe Driver",
+    "slug": "driveme-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "DriveMe uses your location while you are online so we can route the nearest customer requests to you."
+      }
+    },
+    "android": {
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ]
+  }
+}

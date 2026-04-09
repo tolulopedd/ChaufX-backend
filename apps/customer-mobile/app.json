@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "DriveMe Customer",
+    "slug": "driveme-customer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "DriveMe uses your location to confirm your pickup point when you choose your current location."
+      }
+    },
+    "android": {
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+node_modules
+.DS_Store
+.env
+.env.local
+*.log
+coverage
+dist
+build
+.next
+expo-env.d.ts
+apps/api/prisma/dev.db
+apps/api/prisma/dev.db-journal
+apps/api/storage/

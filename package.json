@@ -1,0 +1,21 @@
+{
+  "name": "driveme-platform",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "apps/customer-mobile",
+    "apps/driver-mobile",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @driveme/api",
+    "dev:web": "npm run dev -w @driveme/web",
+    "dev:customer-mobile": "npm run dev -w @driveme/customer-mobile -- --port 8081",
+    "dev:driver-mobile": "npm run dev -w @driveme/driver-mobile -- --port 8082",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  }
+}
