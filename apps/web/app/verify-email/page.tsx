@@ -1,12 +1,13 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { PublicPageShell } from "../../components/public-page-shell";
 import { confirmWebsiteEmailVerification } from "../../lib/api";
 
-export default function VerifyEmailPage() {
+function VerifyEmailPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
@@ -90,5 +91,27 @@ export default function VerifyEmailPage() {
         </div>
       </section>
     </PublicPageShell>
+  );
+}
+
+export default function VerifyEmailPage() {
+  return (
+    <Suspense
+      fallback={
+        <PublicPageShell heroTitle="Verify email" heroCopy="Complete your email verification to continue with DriveMe.">
+          <section className="bg-white">
+            <div className="mx-auto max-w-3xl px-5 py-16 md:px-8">
+              <div className="rounded-[30px] border border-[#E5E7EB] bg-white p-8 text-center shadow-[0_24px_70px_-50px_rgba(15,23,42,0.18)]">
+                <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">Verification</div>
+                <h1 className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-[#0F172A]">Preparing verification.</h1>
+                <p className="mt-4 text-sm leading-7 text-slate-600">Please wait while we load your verification link.</p>
+              </div>
+            </div>
+          </section>
+        </PublicPageShell>
+      }
+    >
+      <VerifyEmailPageContent />
+    </Suspense>
   );
 }

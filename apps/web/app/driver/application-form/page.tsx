@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PublicPageShell } from "../../../components/public-page-shell";
 import { driverApply } from "../../../lib/api";
@@ -78,7 +78,7 @@ async function fileToDataUrl(file: File) {
   });
 }
 
-export default function DriverApplicationFormPage() {
+function DriverApplicationFormPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
@@ -697,5 +697,30 @@ export default function DriverApplicationFormPage() {
         </div>
       </section>
     </PublicPageShell>
+  );
+}
+
+export default function DriverApplicationFormPage() {
+  return (
+    <Suspense
+      fallback={
+        <PublicPageShell
+          heroTitle="Driver application form"
+          heroCopy="Complete the detailed DriveMe driver application form. Your finished submission is routed directly to the admin review module."
+        >
+          <section className="bg-white">
+            <div className="mx-auto max-w-6xl px-5 py-12 md:px-8">
+              <div className="rounded-[30px] border border-[#E5E7EB] bg-white p-7 shadow-[0_24px_70px_-50px_rgba(15,23,42,0.18)]">
+                <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">Detailed onboarding</div>
+                <h1 className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#0F172A]">Loading your application form.</h1>
+                <p className="mt-4 text-sm leading-7 text-slate-600">Please wait while we prepare your onboarding details.</p>
+              </div>
+            </div>
+          </section>
+        </PublicPageShell>
+      }
+    >
+      <DriverApplicationFormPageContent />
+    </Suspense>
   );
 }

@@ -1,12 +1,13 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { AdminBrand } from "../../../components/admin-brand";
 import { fetchApplicationStatus } from "../../../lib/api";
 
-export default function StatusPage() {
+function StatusPageContent() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState(searchParams.get("email") ?? "");
   const [result, setResult] = useState<any>(null);
@@ -93,5 +94,35 @@ export default function StatusPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function StatusPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-[#F6F8FC] px-5 py-10">
+          <div className="mx-auto max-w-3xl">
+            <section className="rounded-[36px] border border-[#E5E7EB] bg-white p-8 shadow-[0_30px_90px_-55px_rgba(15,23,42,0.24)] md:p-10">
+              <div className="flex items-center justify-between gap-4">
+                <AdminBrand href="/" compact />
+                <Link
+                  href="/"
+                  className="inline-flex items-center gap-2 rounded-full border border-[#E5E7EB] px-4 py-2 text-sm font-medium text-slate-600"
+                >
+                  <span aria-hidden="true">←</span>
+                  <span>Back to website</span>
+                </Link>
+              </div>
+              <div className="mt-6 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">Application status</div>
+              <h1 className="mt-3 text-4xl font-semibold tracking-[-0.05em] text-[#0F172A]">Loading your onboarding status</h1>
+              <p className="mt-4 text-sm leading-7 text-slate-600">Please wait while we prepare the status check page.</p>
+            </section>
+          </div>
+        </main>
+      }
+    >
+      <StatusPageContent />
+    </Suspense>
   );
 }

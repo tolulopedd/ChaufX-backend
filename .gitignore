@@ -8,6 +8,7 @@ dist
 build
 .next
 expo-env.d.ts
+*.tsbuildinfo
 apps/api/prisma/dev.db
 apps/api/prisma/dev.db-journal
 apps/api/storage/
