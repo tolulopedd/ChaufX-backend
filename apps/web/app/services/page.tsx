@@ -18,7 +18,7 @@ const services = [
   },
   {
     id: "drink-drive",
-    title: "Drink & Drive",
+    title: "Drink & Dial",
     body: "Book a professional chauffeur to drive your vehicle when attending parties, clubs, events, and other nights out that may involve alcohol."
   },
   {

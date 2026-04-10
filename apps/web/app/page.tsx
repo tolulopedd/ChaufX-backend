@@ -21,7 +21,7 @@ const services = [
     body: "Travel comfortably in your own car for business meetings, airport runs, and out-of-town journeys."
   },
   {
-    title: "Drink & Drive",
+    title: "Drink & Dial",
     body: "Get a professional chauffeur to drive your car after parties, clubs, events, and other nights out that may involve alcohol."
   },
   {
