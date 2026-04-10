@@ -17,7 +17,10 @@ const authLimiter = rateLimit({
   windowMs: 60_000,
   limit: 10,
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  validate: {
+    xForwardedForHeader: false
+  }
 });
 
 const registerSchema = z.object({
