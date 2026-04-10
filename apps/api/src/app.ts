@@ -19,6 +19,10 @@ import { errorMiddleware } from "./middleware/error.js";
 export function createApp() {
   const app = express();
 
+  // Render forwards client IPs through X-Forwarded-* headers, so Express
+  // needs to trust the first proxy hop for rate limiting and auth logging.
+  app.set("trust proxy", 1);
+
   app.use(helmet());
   app.use(cors());
   app.use(express.json({ limit: "25mb" }));
