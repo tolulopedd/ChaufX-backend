@@ -118,6 +118,7 @@ export default function HomePage() {
     <PublicPageShell
       heroTitle="Chauffeur Services on demand"
       heroCopy="DriveMe is a Canadian personal chauffeur service that lets customers book professional drivers for their own vehicles, while giving chauffeurs and operators a simple platform to work from."
+      heroTagline="Your Car, Your Convenience, Your Safety"
     >
       <section className="bg-white">
         <div className="mx-auto max-w-7xl px-5 py-6 md:px-8">

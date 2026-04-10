@@ -2,12 +2,12 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "DriveMe",
+  title: "DriveMe Canada",
   description: "Personal driver platform for vehicle owners, drivers, and operators.",
   icons: {
-    icon: "/icon.png?v=2",
-    shortcut: "/icon.png?v=2",
-    apple: "/icon.png?v=2"
+    icon: "/icon.png?v=3",
+    shortcut: "/icon.png?v=3",
+    apple: "/icon.png?v=3"
   }
 };
 

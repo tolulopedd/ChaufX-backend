@@ -67,6 +67,7 @@ async function buildAndSendVerificationEmail(params: {
   purpose: EmailVerificationPurpose;
   subject: string;
   payload: Prisma.InputJsonValue;
+  firstName: string;
 }) {
   const token = await issueEmailVerificationToken({
     email: params.email,
@@ -80,20 +81,41 @@ async function buildAndSendVerificationEmail(params: {
   const emailResult = await sendTransactionalEmail({
     to: params.email,
     subject: params.subject,
-    html: `
-      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
-        <p>Hello,</p>
-        <p>Please verify your email to continue with DriveMe.</p>
-        <p>
-          <a href="${verifyUrl.toString()}" style="display:inline-block;padding:12px 20px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+    html:
+      params.purpose === EmailVerificationPurpose.DRIVER_ONBOARDING
+        ? `
+      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
+        <p style="margin: 0 0 16px;">${params.firstName},</p>
+        <p style="margin: 0 0 16px;">This email is for your DriveMe Canada driver onboarding.</p>
+        <p style="margin: 0 0 16px;">Please verify your email address to continue your onboarding and access the driver application form.</p>
+        <p style="margin: 24px 0;">
+          <a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
             Verify email
           </a>
         </p>
-        <p>If the button does not work, copy and paste this link into your browser:</p>
-        <p><a href="${verifyUrl.toString()}">${verifyUrl.toString()}</a></p>
+        <p style="margin: 0 0 12px;">After verification, you will see a confirmation message and can continue directly to the onboarding application form.</p>
+        <p style="margin: 16px 0 8px;">If the button does not work, copy and paste this link into your browser:</p>
+        <p style="margin: 0;"><a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer">${verifyUrl.toString()}</a></p>
+      </div>
+    `
+        : `
+      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
+        <p style="margin: 0 0 16px;">Hello ${params.firstName},</p>
+        <p style="margin: 0 0 16px;">Welcome to DriveMe Canada.</p>
+        <p style="margin: 0 0 16px;">Please verify your email address to finish setting up your customer account and continue with DriveMe.</p>
+        <p style="margin: 24px 0;">
+          <a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+            Verify email
+          </a>
+        </p>
+        <p style="margin: 16px 0 8px;">If the button does not work, copy and paste this link into your browser:</p>
+        <p style="margin: 0;"><a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer">${verifyUrl.toString()}</a></p>
       </div>
     `,
-    text: `Please verify your email to continue with DriveMe: ${verifyUrl.toString()}`
+    text:
+      params.purpose === EmailVerificationPurpose.DRIVER_ONBOARDING
+        ? `${params.firstName}, this email is for your DriveMe Canada driver onboarding. Verify your email to continue: ${verifyUrl.toString()}`
+        : `Hello ${params.firstName}, welcome to DriveMe Canada. Verify your email to continue: ${verifyUrl.toString()}`
   });
 
   return {
@@ -125,6 +147,7 @@ authRoutes.post(
       email: input.email,
       purpose: EmailVerificationPurpose.CUSTOMER_SIGNUP,
       subject: "Verify your DriveMe account",
+      firstName: input.fullName.trim().split(/\s+/)[0] ?? input.fullName.trim(),
       payload: {
         fullName: input.fullName,
         email: input.email,
@@ -160,6 +183,7 @@ authRoutes.post(
       email: input.email,
       purpose: EmailVerificationPurpose.DRIVER_ONBOARDING,
       subject: "Verify your email to continue onboarding",
+      firstName: input.firstName,
       payload: {
         firstName: input.firstName,
         lastName: input.lastName,

@@ -6,9 +6,10 @@ type PublicPageShellProps = {
   children: ReactNode;
   heroTitle: string;
   heroCopy: string;
+  heroTagline?: string;
 };
 
-export function PublicPageShell({ children, heroTitle, heroCopy }: PublicPageShellProps) {
+export function PublicPageShell({ children, heroTitle, heroCopy, heroTagline }: PublicPageShellProps) {
   return (
     <main className="min-h-screen bg-[#F6F8FC]">
       <section
@@ -38,6 +39,11 @@ export function PublicPageShell({ children, heroTitle, heroCopy }: PublicPageShe
               <p className="mt-5 max-w-2xl text-base leading-7 text-white/80 [text-shadow:0_3px_18px_rgba(5,11,21,0.8)]">
                 {heroCopy}
               </p>
+              {heroTagline ? (
+                <div className="mt-6 text-lg italic tracking-[0.02em] text-[#F6D28B] [font-family:Georgia,'Times New Roman',serif] [text-shadow:0_3px_18px_rgba(5,11,21,0.86)] md:text-[1.3rem]">
+                  {heroTagline}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
