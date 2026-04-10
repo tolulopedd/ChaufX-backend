@@ -85,7 +85,7 @@ async function buildAndSendVerificationEmail(params: {
       params.purpose === EmailVerificationPurpose.DRIVER_ONBOARDING
         ? `
       <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
-        <p style="margin: 0 0 16px;">${params.firstName},</p>
+        <p style="margin: 0 0 16px;">Dear ${params.firstName},</p>
         <p style="margin: 0 0 16px;">This email is for your DriveMe Canada driver onboarding.</p>
         <p style="margin: 0 0 16px;">Please verify your email address to continue your onboarding and access the driver application form.</p>
         <p style="margin: 24px 0;">
@@ -93,7 +93,7 @@ async function buildAndSendVerificationEmail(params: {
             Verify email
           </a>
         </p>
-        <p style="margin: 0 0 12px;">After verification, you will see a confirmation message and can continue directly to the onboarding application form.</p>
+        <p style="margin: 0 0 12px;">After verification, you will be taken directly to the onboarding application form.</p>
         <p style="margin: 16px 0 8px;">If the button does not work, copy and paste this link into your browser:</p>
         <p style="margin: 0;"><a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer">${verifyUrl.toString()}</a></p>
       </div>
@@ -114,7 +114,7 @@ async function buildAndSendVerificationEmail(params: {
     `,
     text:
       params.purpose === EmailVerificationPurpose.DRIVER_ONBOARDING
-        ? `${params.firstName}, this email is for your DriveMe Canada driver onboarding. Verify your email to continue: ${verifyUrl.toString()}`
+        ? `Dear ${params.firstName}, this email is for your DriveMe Canada driver onboarding. Verify your email to continue: ${verifyUrl.toString()}`
         : `Hello ${params.firstName}, welcome to DriveMe Canada. Verify your email to continue: ${verifyUrl.toString()}`
   });
 

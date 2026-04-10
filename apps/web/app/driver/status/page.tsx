@@ -2,9 +2,9 @@
 
 import { Suspense } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { AdminBrand } from "../../../components/admin-brand";
 import { fetchApplicationStatus } from "../../../lib/api";
 
 function StatusPageContent() {
@@ -34,7 +34,9 @@ function StatusPageContent() {
       <div className="mx-auto max-w-3xl">
         <section className="rounded-[36px] border border-[#E5E7EB] bg-white p-8 shadow-[0_30px_90px_-55px_rgba(15,23,42,0.24)] md:p-10">
           <div className="flex items-center justify-between gap-4">
-            <AdminBrand href="/" compact />
+            <Link href="/" className="relative block h-14 w-[210px] max-w-[60vw]">
+              <Image src="/driver-status-logo.png" alt="DriveMe Canada" fill className="object-contain object-left" priority />
+            </Link>
             <Link
               href="/"
               className="inline-flex items-center gap-2 rounded-full border border-[#E5E7EB] px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-[#D4D8E0] hover:bg-[#F8FAFC] hover:text-[#0F172A]"
@@ -105,7 +107,9 @@ export default function StatusPage() {
           <div className="mx-auto max-w-3xl">
             <section className="rounded-[36px] border border-[#E5E7EB] bg-white p-8 shadow-[0_30px_90px_-55px_rgba(15,23,42,0.24)] md:p-10">
               <div className="flex items-center justify-between gap-4">
-                <AdminBrand href="/" compact />
+                <Link href="/" className="relative block h-14 w-[210px] max-w-[60vw]">
+                  <Image src="/driver-status-logo.png" alt="DriveMe Canada" fill className="object-contain object-left" priority />
+                </Link>
                 <Link
                   href="/"
                   className="inline-flex items-center gap-2 rounded-full border border-[#E5E7EB] px-4 py-2 text-sm font-medium text-slate-600"

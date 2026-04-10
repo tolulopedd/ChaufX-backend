@@ -38,13 +38,11 @@ function VerifyEmailPageContent() {
             verificationToken: token,
             email: result.email,
             firstName: result.payload?.firstName ?? "",
-            lastName: result.payload?.lastName ?? ""
+            lastName: result.payload?.lastName ?? "",
+            verified: "1"
           });
 
-          setVerifiedPurpose("driver");
-          setStatus("success");
-          setMessage("Your email has been verified. Kindly complete the onboarding application form before moving forward.");
-          setDriverContinueHref(`/driver/application-form?${params.toString()}`);
+          router.replace(`/driver/application-form?${params.toString()}`);
           return;
         }
 

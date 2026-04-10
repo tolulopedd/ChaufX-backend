@@ -83,6 +83,7 @@ function DriverApplicationFormPageContent() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const verified = searchParams.get("verified") === "1";
   const [uploadedFiles, setUploadedFiles] = useState<Record<DocumentUploadKey, File | null>>({
     driverLicenseFront: null,
     driverLicenseBack: null,
@@ -257,6 +258,11 @@ function DriverApplicationFormPageContent() {
             <div>
               <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">Detailed onboarding</div>
               <h1 className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#0F172A]">Complete your driver application</h1>
+              {verified ? (
+                <p className="mt-3 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                  Your email has been verified. Kindly complete the onboarding application form.
+                </p>
+              ) : null}
               {!form.verificationToken ? (
                 <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
                   Please verify your email from the link we sent before completing this application.
