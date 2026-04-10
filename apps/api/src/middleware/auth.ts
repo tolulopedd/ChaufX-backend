@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import type { UserRole } from "@driveme/types";
+import type { UserRole } from "../types/shared.js";
 import { AppError } from "../common/AppError.js";
 import { verifyAccessToken } from "../lib/auth.js";
 

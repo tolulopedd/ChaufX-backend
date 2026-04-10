@@ -1,6 +1,5 @@
 import { BookingStatus } from "@prisma/client";
-import { buildActivationWindow, isTripWindowActive } from "@driveme/config";
-import { appConfig } from "@driveme/config";
+import { appConfig, buildActivationWindow, isTripWindowActive } from "../../lib/app-config.js";
 import { AppError } from "../../common/AppError.js";
 import { prisma } from "../../lib/prisma.js";
 

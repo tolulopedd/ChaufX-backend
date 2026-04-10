@@ -1,5 +1,5 @@
 import { AccountStatus, UserRole } from "@prisma/client";
-import { defaultServiceZones } from "@driveme/config";
+import { defaultServiceZones } from "../src/lib/app-config.js";
 import { haversineDistanceKm } from "../src/modules/bookings/booking.service.js";
 import { hashPassword } from "../src/lib/auth.js";
 import { prisma } from "../src/lib/prisma.js";

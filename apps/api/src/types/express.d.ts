@@ -1,4 +1,4 @@
-import type { UserRole } from "@driveme/types";
+import type { UserRole } from "./shared.js";
 
 declare global {
   namespace Express {

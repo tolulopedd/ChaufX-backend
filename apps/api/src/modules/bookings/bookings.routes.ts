@@ -1,4 +1,4 @@
-import { buildActivationWindow } from "@driveme/config";
+import { buildActivationWindow } from "../../lib/app-config.js";
 import { BookingDispatchStatus, BookingStatus } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
