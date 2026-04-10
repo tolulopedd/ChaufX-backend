@@ -5,9 +5,9 @@ export const metadata: Metadata = {
   title: "DriveMe Canada",
   description: "Personal driver platform for vehicle owners, drivers, and operators.",
   icons: {
-    icon: "/icon.png?v=3",
-    shortcut: "/icon.png?v=3",
-    apple: "/icon.png?v=3"
+    icon: "/icon.png?v=4",
+    shortcut: "/icon.png?v=4",
+    apple: "/icon.png?v=4"
   }
 };
 
