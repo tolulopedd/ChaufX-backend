@@ -78,15 +78,21 @@ export default function ApplicationsPage() {
     prompt: string;
   } | null>(null);
   const [reviewNote, setReviewNote] = useState("");
+  const [preview, setPreview] = useState<{
+    title: string;
+    fileName: string;
+    src: string;
+    mimeType: string;
+  } | null>(null);
 
   useEffect(() => {
-    if (!data.length) {
+    if (!data.length || !selectedId) {
       setSelectedId("");
       return;
     }
 
-    if (!selectedId || !data.some((application) => application.id === selectedId)) {
-      setSelectedId(data[0].id);
+    if (!data.some((application) => application.id === selectedId)) {
+      setSelectedId("");
     }
   }, [data, selectedId]);
 
@@ -133,14 +139,12 @@ export default function ApplicationsPage() {
 
     try {
       const result = await fetchAdminDocumentLink(documentId);
-      const viewer = window.open(result.url, "_blank", "noopener,noreferrer");
-      if (!viewer) {
-        const link = document.createElement("a");
-        link.href = result.url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.click();
-      }
+      setPreview({
+        title: fileName,
+        fileName,
+        src: result.url,
+        mimeType: result.mimeType || "application/octet-stream"
+      });
     } finally {
       setBusyId("");
     }
@@ -166,17 +170,12 @@ export default function ApplicationsPage() {
           <div className="space-y-4">
             <div className="space-y-3">
               {data.map((application) => {
-                const active = application.id === selectedId;
                 return (
                   <button
                     key={application.id}
                     type="button"
                     onClick={() => setSelectedId(application.id)}
-                    className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
-                      active
-                        ? "border-[#C7D2FE] bg-[#EEF2FF]"
-                        : "border-[#E5E7EB] bg-[#F8FAFC] hover:border-[#D6DCEF] hover:bg-white"
-                    }`}
+                    className="w-full rounded-[24px] border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-4 text-left transition hover:border-[#D6DCEF] hover:bg-white"
                   >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0 flex-1">
@@ -194,192 +193,227 @@ export default function ApplicationsPage() {
                           label={formatApplicationStatus(application.status)}
                           tone={application.status === "APPROVED" ? "emerald" : application.status === "REJECTED" ? "rose" : "amber"}
                         />
-                        {active ? <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[#4338CA]">Selected</span> : null}
+                        <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[#4338CA]">Open</span>
                       </div>
                     </div>
                   </button>
                 );
               })}
             </div>
-
-            {selectedApplication ? (
-              <div className="rounded-[28px] border border-[#E5E7EB] bg-[#F8FAFC] p-5">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <h2 className="text-2xl font-semibold tracking-[-0.05em] text-slate-950">{selectedApplication.fullName}</h2>
-                      <StatusPill
-                        label={formatApplicationStatus(selectedApplication.status)}
-                        tone={selectedApplication.status === "APPROVED" ? "emerald" : selectedApplication.status === "REJECTED" ? "rose" : "amber"}
-                      />
-                    </div>
-                    <p className="mt-2 text-sm text-slate-500">
-                      {selectedApplication.email} · {selectedApplication.phone}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={busyId === selectedApplication.id || reviewLocked}
-                      onClick={() => {
-                        setReviewAction({
-                          applicationId: selectedApplication.id,
-                          decision: "approved",
-                          title: "Approve application",
-                          prompt: "Add a personal note to the driver for this approval."
-                        });
-                        setReviewNote("Your application has been approved. Welcome to DriveMe.");
-                        setNotice("");
-                      }}
-                      className="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === selectedApplication.id || reviewLocked}
-                      onClick={() => {
-                        setReviewAction({
-                          applicationId: selectedApplication.id,
-                          decision: "rejected",
-                          title: "Reject application",
-                          prompt: "Add a rejection note to the driver. This message will be sent to the driver."
-                        });
-                        setReviewNote("");
-                        setNotice("");
-                      }}
-                      className="rounded-2xl border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      Reject
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === selectedApplication.id || reviewLocked}
-                      onClick={() => {
-                        setReviewAction({
-                          applicationId: selectedApplication.id,
-                          decision: "additional_info",
-                          title: "Request for additional information",
-                          prompt: "Tell the driver extra details or documents are needed to proceed with this application"
-                        });
-                        setReviewNote("");
-                        setNotice("");
-                      }}
-                      className="rounded-2xl border border-[#DCDDFF] bg-[#EEF0FF] px-4 py-2.5 text-sm font-semibold text-[#4338CA] disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      Ask for info
-                    </button>
-                  </div>
-                </div>
-
-                {reviewLocked ? (
-                  <div className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm text-slate-500">
-                    This application has already been {String(selectedApplication.status).toLowerCase()}. No further review action is required.
-                  </div>
-                ) : null}
-
-                <div className="mt-5 grid gap-3 md:grid-cols-3">
-                  <div className="rounded-2xl border border-white bg-white px-4 py-4">
-                    <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Experience</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">{selectedApplication.yearsOfExperience} years</div>
-                  </div>
-                  <div className="rounded-2xl border border-white bg-white px-4 py-4">
-                    <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Service areas</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">
-                      {selectedApplication.preferredServiceAreas.length ? selectedApplication.preferredServiceAreas.join(", ") : "Not provided"}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white bg-white px-4 py-4">
-                    <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Submitted</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">{formatDate(selectedApplication.createdAt)}</div>
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-4">
-                  <DetailSection
-                    title="Personal information"
-                    fields={[
-                      { label: "Full name", value: selectedApplication.fullName },
-                      { label: "Email", value: selectedApplication.email },
-                      { label: "Phone number", value: selectedApplication.phone },
-                      { label: "Home address", value: selectedApplication.address },
-                      { label: "Date of birth", value: selectedApplicationDetails["Date of birth"] },
-                      { label: "Authorized to work in Canada", value: selectedApplicationDetails["Legally authorized to work in Canada"] }
-                    ]}
-                  />
-
-                  <DetailSection
-                    title="License & driving history"
-                    fields={[
-                      { label: "License number", value: selectedApplication.licenseNumber },
-                      { label: "Province of issue", value: selectedApplicationDetails["Province of issue"] },
-                      { label: "License class", value: selectedApplicationDetails["License class"] },
-                      { label: "License expiry date", value: selectedApplicationDetails["License expiry date"] },
-                      { label: "Traffic violations", value: selectedApplicationDetails["Traffic violations"] },
-                      { label: "License suspensions", value: selectedApplicationDetails["License suspensions"] },
-                      { label: "At-fault accidents", value: selectedApplicationDetails["At-fault accidents"] },
-                      { label: "DUI / impaired driving", value: selectedApplicationDetails["DUI / impaired driving"] }
-                    ]}
-                  />
-
-                  <DetailSection
-                    title="Experience & availability"
-                    fields={[
-                      { label: "Professional experience", value: selectedApplicationDetails["Professional experience"] },
-                      { label: "Previous employer", value: selectedApplicationDetails["Previous employer"] },
-                      { label: "Preferred working hours", value: selectedApplicationDetails["Preferred working hours"] },
-                      { label: "Availability per week", value: selectedApplicationDetails["Availability per week"] },
-                      { label: "Service capability", value: selectedApplicationDetails["Service capability"] },
-                      { label: "Owns a vehicle", value: selectedApplicationDetails["Owns a vehicle"] }
-                    ]}
-                  />
-
-                  <DetailSection
-                    title="Consent & signature"
-                    fields={[
-                      { label: "Emergency contact", value: selectedApplication.emergencyContact },
-                      { label: "Consent checks", value: selectedApplicationDetails["Consents - criminal"] },
-                      { label: "Professional standards", value: selectedApplicationDetails["Professional standards acknowledged"] },
-                      { label: "Signature", value: selectedApplicationDetails["Signature"] },
-                      { label: "Application date", value: selectedApplicationDetails["Application date"] }
-                    ]}
-                  />
-
-                  <div className="rounded-2xl border border-white bg-white px-4 py-4">
-                    <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Uploaded documents</div>
-                    {selectedApplication.documents.length ? (
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                        {selectedApplication.documents.map((document: any) => (
-                          <div key={document.id} className="flex items-center justify-between gap-3 rounded-2xl border border-[#E5E7EB] px-4 py-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-semibold text-slate-950">{document.fileName}</div>
-                              <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{document.type.replaceAll("_", " ")}</div>
-                            </div>
-                            <button
-                              type="button"
-                              disabled={busyId === document.id}
-                              onClick={() => previewDocument(document.id, document.fileName)}
-                              className="rounded-2xl border border-[#C7D2FE] bg-[#EEF2FF] px-3 py-2 text-xs font-semibold text-[#4338CA] disabled:opacity-60"
-                            >
-                              View
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="mt-3 text-sm text-slate-500">No uploaded documents yet.</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <EmptyState title="Select an application" description="Pick any row from the applications queue to review the full submission details." />
-            )}
           </div>
         ) : (
           <EmptyState title="No pending applications" description="New driver onboarding files will appear here once candidates submit their details." />
         )}
       </Panel>
+
+      {selectedApplication ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#0F172A]/70 px-5 py-8">
+          <div className="max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-[32px] bg-white p-5 shadow-[0_40px_100px_-45px_rgba(15,23,42,0.5)]">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <h2 className="text-2xl font-semibold tracking-[-0.05em] text-slate-950">{selectedApplication.fullName}</h2>
+                  <StatusPill
+                    label={formatApplicationStatus(selectedApplication.status)}
+                    tone={selectedApplication.status === "APPROVED" ? "emerald" : selectedApplication.status === "REJECTED" ? "rose" : "amber"}
+                  />
+                </div>
+                <p className="mt-2 text-sm text-slate-500">
+                  {selectedApplication.email} · {selectedApplication.phone}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busyId === selectedApplication.id || reviewLocked}
+                  onClick={() => {
+                    setReviewAction({
+                      applicationId: selectedApplication.id,
+                      decision: "approved",
+                      title: "Approve application",
+                      prompt: "Add a personal note to the driver for this approval."
+                    });
+                    setReviewNote("Your application has been approved. Welcome to DriveMe.");
+                    setNotice("");
+                  }}
+                  className="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId === selectedApplication.id || reviewLocked}
+                  onClick={() => {
+                    setReviewAction({
+                      applicationId: selectedApplication.id,
+                      decision: "rejected",
+                      title: "Reject application",
+                      prompt: "Add a rejection note to the driver. This message will be sent to the driver."
+                    });
+                    setReviewNote("");
+                    setNotice("");
+                  }}
+                  className="rounded-2xl border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Reject
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId === selectedApplication.id || reviewLocked}
+                  onClick={() => {
+                    setReviewAction({
+                      applicationId: selectedApplication.id,
+                      decision: "additional_info",
+                      title: "Request for additional information",
+                      prompt: "Tell the driver extra details or documents are needed to proceed with this application"
+                    });
+                    setReviewNote("");
+                    setNotice("");
+                  }}
+                  className="rounded-2xl border border-[#DCDDFF] bg-[#EEF0FF] px-4 py-2.5 text-sm font-semibold text-[#4338CA] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Ask for info
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId("")}
+                  className="rounded-2xl border border-[#E5E7EB] px-4 py-2.5 text-sm font-semibold text-slate-700"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {reviewLocked ? (
+              <div className="mt-4 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm text-slate-500">
+                This application has already been {String(selectedApplication.status).toLowerCase()}. No further review action is required.
+              </div>
+            ) : null}
+
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-4">
+                <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Experience</div>
+                <div className="mt-2 text-sm font-semibold text-slate-950">{selectedApplication.yearsOfExperience} years</div>
+              </div>
+              <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-4">
+                <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Service areas</div>
+                <div className="mt-2 text-sm font-semibold text-slate-950">
+                  {selectedApplication.preferredServiceAreas.length ? selectedApplication.preferredServiceAreas.join(", ") : "Not provided"}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-4">
+                <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Submitted</div>
+                <div className="mt-2 text-sm font-semibold text-slate-950">{formatDate(selectedApplication.createdAt)}</div>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <DetailSection
+                title="Personal information"
+                fields={[
+                  { label: "Full name", value: selectedApplication.fullName },
+                  { label: "Email", value: selectedApplication.email },
+                  { label: "Phone number", value: selectedApplication.phone },
+                  { label: "Home address", value: selectedApplication.address },
+                  { label: "Date of birth", value: selectedApplicationDetails["Date of birth"] },
+                  { label: "Authorized to work in Canada", value: selectedApplicationDetails["Legally authorized to work in Canada"] }
+                ]}
+              />
+
+              <DetailSection
+                title="License & driving history"
+                fields={[
+                  { label: "License number", value: selectedApplication.licenseNumber },
+                  { label: "Province of issue", value: selectedApplicationDetails["Province of issue"] },
+                  { label: "License class", value: selectedApplicationDetails["License class"] },
+                  { label: "License expiry date", value: selectedApplicationDetails["License expiry date"] },
+                  { label: "Traffic violations", value: selectedApplicationDetails["Traffic violations"] },
+                  { label: "License suspensions", value: selectedApplicationDetails["License suspensions"] },
+                  { label: "At-fault accidents", value: selectedApplicationDetails["At-fault accidents"] },
+                  { label: "DUI / impaired driving", value: selectedApplicationDetails["DUI / impaired driving"] }
+                ]}
+              />
+
+              <DetailSection
+                title="Experience & availability"
+                fields={[
+                  { label: "Professional experience", value: selectedApplicationDetails["Professional experience"] },
+                  { label: "Previous employer", value: selectedApplicationDetails["Previous employer"] },
+                  { label: "Preferred working hours", value: selectedApplicationDetails["Preferred working hours"] },
+                  { label: "Availability per week", value: selectedApplicationDetails["Availability per week"] },
+                  { label: "Service capability", value: selectedApplicationDetails["Service capability"] },
+                  { label: "Owns a vehicle", value: selectedApplicationDetails["Owns a vehicle"] }
+                ]}
+              />
+
+              <DetailSection
+                title="Consent & signature"
+                fields={[
+                  { label: "Emergency contact", value: selectedApplication.emergencyContact },
+                  { label: "Consent checks", value: selectedApplicationDetails["Consents - criminal"] },
+                  { label: "Professional standards", value: selectedApplicationDetails["Professional standards acknowledged"] },
+                  { label: "Signature", value: selectedApplicationDetails["Signature"] },
+                  { label: "Application date", value: selectedApplicationDetails["Application date"] }
+                ]}
+              />
+
+              <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-4">
+                <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Uploaded documents</div>
+                {selectedApplication.documents.length ? (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {selectedApplication.documents.map((document: any) => (
+                      <div key={document.id} className="flex items-center justify-between gap-3 rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-slate-950">{document.fileName}</div>
+                          <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{document.type.replaceAll("_", " ")}</div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={busyId === document.id}
+                          onClick={() => previewDocument(document.id, document.fileName)}
+                          className="rounded-2xl border border-[#C7D2FE] bg-[#EEF2FF] px-3 py-2 text-xs font-semibold text-[#4338CA] disabled:opacity-60"
+                        >
+                          View
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-3 text-sm text-slate-500">No uploaded documents yet.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {preview ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/72 px-5 py-8">
+          <div className="relative w-full max-w-5xl rounded-[32px] bg-white p-5 shadow-[0_40px_100px_-45px_rgba(15,23,42,0.5)]">
+            <div className="flex items-center justify-between gap-4 border-b border-[#E5E7EB] pb-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-950">{preview.title}</div>
+                <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{preview.mimeType || "Document preview"}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                className="rounded-full border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-slate-700"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 h-[75vh] overflow-hidden rounded-[24px] border border-[#E5E7EB] bg-[#F8FAFC]">
+              {preview.mimeType.startsWith("image/") ? (
+                <img src={preview.src} alt={preview.fileName} className="h-full w-full object-contain bg-white" />
+              ) : (
+                <iframe src={preview.src} title={preview.fileName} className="h-full w-full bg-white" />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {reviewAction ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/70 px-5 py-8">
