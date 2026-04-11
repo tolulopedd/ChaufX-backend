@@ -9,6 +9,7 @@ import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { createAuditLog } from "../../lib/audit.js";
 import { AppError } from "../../common/AppError.js";
+import { createDocumentAccessUrl, isS3DocumentReference } from "../../lib/document-storage.js";
 
 export const adminRoutes = Router();
 
@@ -290,6 +291,17 @@ adminRoutes.get(
 
     if (!document) {
       throw new AppError("Document not found", 404, "DOCUMENT_NOT_FOUND");
+    }
+
+    if (isS3DocumentReference(document.fileUrl)) {
+      const signedUrl = await createDocumentAccessUrl(document.fileUrl).catch(() => {
+        throw new AppError("Stored document file is unavailable", 404, "DOCUMENT_FILE_MISSING");
+      });
+      if (!signedUrl) {
+        throw new AppError("Stored document file is unavailable", 404, "DOCUMENT_FILE_MISSING");
+      }
+      response.redirect(signedUrl);
+      return;
     }
 
     if (!path.isAbsolute(document.fileUrl)) {

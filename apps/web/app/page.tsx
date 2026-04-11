@@ -116,7 +116,7 @@ const portals = [
 export default function HomePage() {
   return (
     <PublicPageShell
-      heroTitle="Chauffeur Services on demand"
+      heroTitle="Driver Services on demand"
       heroCopy="DriveMe is a Canadian personal chauffeur service that lets customers book professional drivers for their own vehicles, while giving chauffeurs and operators a simple platform to work from."
       heroTagline="Your Car, Your Convenience, Your Safety"
     >
