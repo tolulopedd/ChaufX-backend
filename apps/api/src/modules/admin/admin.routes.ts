@@ -280,6 +280,44 @@ adminRoutes.post(
 );
 
 adminRoutes.get(
+  "/admin/documents/:documentId/link",
+  asyncHandler(async (request, response) => {
+    const documentId = paramValue(request.params.documentId);
+    const document = await prisma.document.findUnique({
+      where: {
+        id: documentId
+      }
+    });
+
+    if (!document) {
+      throw new AppError("Document not found", 404, "DOCUMENT_NOT_FOUND");
+    }
+
+    if (isS3DocumentReference(document.fileUrl)) {
+      const signedUrl = await createDocumentAccessUrl(document.fileUrl).catch(() => {
+        throw new AppError("Stored document file is unavailable", 404, "DOCUMENT_FILE_MISSING");
+      });
+      if (!signedUrl) {
+        throw new AppError("Stored document file is unavailable", 404, "DOCUMENT_FILE_MISSING");
+      }
+
+      response.json({
+        url: signedUrl,
+        fileName: document.fileName,
+        mimeType: document.mimeType ?? null
+      });
+      return;
+    }
+
+    response.json({
+      url: `${request.protocol}://${request.get("host")}/api/admin/documents/${document.id}`,
+      fileName: document.fileName,
+      mimeType: document.mimeType ?? null
+    });
+  })
+);
+
+adminRoutes.get(
   "/admin/documents/:documentId",
   asyncHandler(async (request, response) => {
     const documentId = paramValue(request.params.documentId);

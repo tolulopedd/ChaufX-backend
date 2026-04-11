@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AdminShell, Panel } from "../../components/admin-shell";
 import { EmptyState, StatCard, StatusPill } from "../../components/admin-primitives";
-import { adminFetch, fetchAdminDocumentBlob, useAdminResource } from "../../lib/api";
+import { adminFetch, fetchAdminDocumentLink, useAdminResource } from "../../lib/api";
 
 function formatApplicationStatus(status?: string) {
   return (status ?? "SUBMITTED").replaceAll("_", " ");
@@ -78,12 +78,6 @@ export default function ApplicationsPage() {
     prompt: string;
   } | null>(null);
   const [reviewNote, setReviewNote] = useState("");
-  const [preview, setPreview] = useState<{
-    title: string;
-    fileName: string;
-    src: string;
-    mimeType: string;
-  } | null>(null);
 
   useEffect(() => {
     if (!data.length) {
@@ -95,14 +89,6 @@ export default function ApplicationsPage() {
       setSelectedId(data[0].id);
     }
   }, [data, selectedId]);
-
-  useEffect(() => {
-    return () => {
-      if (preview?.src) {
-        window.URL.revokeObjectURL(preview.src);
-      }
-    };
-  }, [preview]);
 
   const selectedApplication = useMemo(
     () => data.find((application) => application.id === selectedId) ?? null,
@@ -146,18 +132,15 @@ export default function ApplicationsPage() {
     setBusyId(documentId);
 
     try {
-      const blob = await fetchAdminDocumentBlob(documentId);
-      if (preview?.src) {
-        window.URL.revokeObjectURL(preview.src);
+      const result = await fetchAdminDocumentLink(documentId);
+      const viewer = window.open(result.url, "_blank", "noopener,noreferrer");
+      if (!viewer) {
+        const link = document.createElement("a");
+        link.href = result.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.click();
       }
-
-      const src = window.URL.createObjectURL(blob);
-      setPreview({
-        title: fileName,
-        fileName,
-        src,
-        mimeType: blob.type || "application/octet-stream"
-      });
     } finally {
       setBusyId("");
     }
@@ -397,37 +380,6 @@ export default function ApplicationsPage() {
           <EmptyState title="No pending applications" description="New driver onboarding files will appear here once candidates submit their details." />
         )}
       </Panel>
-
-      {preview ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/70 px-5 py-8">
-          <div className="relative w-full max-w-5xl rounded-[32px] bg-white p-5 shadow-[0_40px_100px_-45px_rgba(15,23,42,0.5)]">
-            <div className="flex items-center justify-between gap-4 border-b border-[#E5E7EB] pb-4">
-              <div>
-                <div className="text-sm font-semibold text-slate-950">{preview.title}</div>
-                <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{preview.mimeType || "Document preview"}</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  window.URL.revokeObjectURL(preview.src);
-                  setPreview(null);
-                }}
-                className="rounded-full border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-slate-700"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="mt-5 h-[75vh] overflow-hidden rounded-[24px] border border-[#E5E7EB] bg-[#F8FAFC]">
-              {preview.mimeType.startsWith("image/") ? (
-                <img src={preview.src} alt={preview.fileName} className="h-full w-full object-contain bg-white" />
-              ) : (
-                <iframe src={preview.src} title={preview.fileName} className="h-full w-full bg-white" />
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {reviewAction ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/70 px-5 py-8">

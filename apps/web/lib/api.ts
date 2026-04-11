@@ -317,9 +317,9 @@ export async function adminFetch<T>(path: string, options?: RequestInit): Promis
   return payload as T;
 }
 
-export async function openAdminDocument(documentId: string, fallbackName: string) {
+export async function fetchAdminDocumentLink(documentId: string) {
   const token = getStoredToken();
-  const response = await fetch(`${API_BASE}/admin/documents/${documentId}`, {
+  const response = await fetch(`${API_BASE}/admin/documents/${documentId}/link`, {
     headers: {
       Authorization: token ? `Bearer ${token}` : ""
     }
@@ -335,39 +335,11 @@ export async function openAdminDocument(documentId: string, fallbackName: string
     throw new Error(payload?.error?.message ?? "Unable to open document");
   }
 
-  const blob = await response.blob();
-  const objectUrl = window.URL.createObjectURL(blob);
-  const viewer = window.open(objectUrl, "_blank", "noopener,noreferrer");
-
-  if (!viewer) {
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = fallbackName;
-    link.click();
-  }
-
-  window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 60_000);
-}
-
-export async function fetchAdminDocumentBlob(documentId: string) {
-  const token = getStoredToken();
-  const response = await fetch(`${API_BASE}/admin/documents/${documentId}`, {
-    headers: {
-      Authorization: token ? `Bearer ${token}` : ""
-    }
-  });
-
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      handleAdminAuthFailure();
-      throw new Error("Session expired. Redirecting to login...");
-    }
-
-    const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error?.message ?? "Unable to load document");
-  }
-
-  return response.blob();
+  return (await response.json()) as {
+    url: string;
+    fileName: string;
+    mimeType?: string | null;
+  };
 }
 
 export function useAdminResource<T>(path: string, fallback: T) {
