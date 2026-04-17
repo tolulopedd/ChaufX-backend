@@ -342,6 +342,7 @@ export default function ApplicationsPage() {
                   { label: "Preferred working hours", value: selectedApplicationDetails["Preferred working hours"] },
                   { label: "Availability per week", value: selectedApplicationDetails["Availability per week"] },
                   { label: "Service capability", value: selectedApplicationDetails["Service capability"] },
+                  { label: "Health / emergency training", value: selectedApplicationDetails["Health / emergency training"] },
                   { label: "Owns a vehicle", value: selectedApplicationDetails["Owns a vehicle"] }
                 ]}
               />
@@ -352,6 +353,7 @@ export default function ApplicationsPage() {
                   { label: "Emergency contact", value: selectedApplication.emergencyContact },
                   { label: "Consent checks", value: selectedApplicationDetails["Consents - criminal"] },
                   { label: "Professional standards", value: selectedApplicationDetails["Professional standards acknowledged"] },
+                  { label: "Proof of work authorization", value: selectedApplicationDetails["Proof of work authorization"] },
                   { label: "Signature", value: selectedApplicationDetails["Signature"] },
                   { label: "Application date", value: selectedApplicationDetails["Application date"] }
                 ]}

@@ -34,13 +34,20 @@ export default function DriverApplyIntroPage() {
     }
   }
 
+
+
   return (
-    <PublicPageShell
-      heroTitle="Become a driver"
-      heroCopy="Join DriveMe’s growing network of professional chauffeurs across Canada and help customers with personal driving in their own vehicles."
-    >
+
       <section className="bg-white">
-        <div className="mx-auto max-w-6xl px-5 py-12 md:px-8">
+        <div className="mx-auto max-w-6xl px-5 py-30 md:px-8">
+              <div className="mb-6">
+      <Link
+        href="/"
+        className="inline-flex items-center text-sm font-semibold text-[#2563EB] hover:underline"
+      >
+        ← Back
+      </Link>
+    </div>
           <div className="grid gap-6 lg:grid-cols-[0.48fr_0.52fr]">
             <div className="rounded-[30px] border border-[#E5E7EB] bg-[#F8FAFC] p-7 shadow-[0_24px_70px_-50px_rgba(15,23,42,0.18)]">
               <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">DriveMe network</div>
@@ -185,6 +192,6 @@ export default function DriverApplyIntroPage() {
           </div>
         </div>
       </section>
-    </PublicPageShell>
+
   );
 }

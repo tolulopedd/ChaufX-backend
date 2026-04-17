@@ -29,6 +29,24 @@ function StatusPageContent() {
     }
   }
 
+  const statusLabel =
+    result?.status === "UNDER_REVIEW" && result?.reviewNote
+      ? "Additional information required"
+      : result?.status === "APPROVED"
+        ? "Approved"
+        : result?.status === "REJECTED"
+          ? "Application update"
+          : result?.status ?? "";
+
+  const statusMessage =
+    result?.status === "UNDER_REVIEW" && result?.reviewNote
+      ? "Our team needs a few more details before we can continue with your application."
+      : result?.status === "APPROVED"
+        ? "Your application has been approved. You can now continue with DriveMe driver access."
+        : result?.status === "REJECTED"
+          ? "There is an important update on your application. Please review the note below."
+          : "Your application is being reviewed by our team.";
+
   return (
     <main className="min-h-screen bg-[#F6F8FC] px-5 py-10">
       <div className="mx-auto max-w-3xl">
@@ -70,15 +88,19 @@ function StatusPageContent() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-sm text-slate-500">Current status</div>
-                  <div className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-[#0F172A]">{result.status}</div>
+                  <div className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-[#0F172A]">{statusLabel}</div>
                 </div>
               </div>
 
               <div className="mt-5 text-sm text-slate-600">
                 Service areas: {result.preferredServiceAreas.join(", ")} · Documents: {result.documents.length}
               </div>
-              <div className="mt-3 text-sm text-slate-500">
-                {result.reviewNote ? `Review note: ${result.reviewNote}` : "Your application is being reviewed by our team."}
+              <div className="mt-3 rounded-2xl border border-[#E5E7EB] bg-white px-4 py-4">
+                <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400">Application update</div>
+                <div className="mt-2 text-sm text-slate-600">{statusMessage}</div>
+                <div className="mt-3 text-sm font-medium text-slate-800">
+                  {result.reviewNote ? `Review note: ${result.reviewNote}` : "No additional note has been shared yet."}
+                </div>
               </div>
 
               <div className="mt-6 grid gap-3 sm:grid-cols-2">

@@ -52,7 +52,7 @@ export default function DriverLoginPage() {
     <main className="min-h-screen bg-[#F6F8FC] px-5 py-10">
       <div className="mx-auto max-w-xl">
         <section className="rounded-[36px] border border-[#E5E7EB] bg-white p-8 shadow-[0_30px_90px_-55px_rgba(15,23,42,0.24)] md:p-10">
-          <AdminBrand href="/" compact />
+          <AdminBrand href="/" compact variant="login" />
 
           <div className="mt-6 flex items-center justify-between gap-4">
             <div>

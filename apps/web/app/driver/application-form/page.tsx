@@ -37,6 +37,8 @@ type DocumentUploadKey =
   | "backgroundCheck"
   | "proofOfAddress"
   | "resume"
+  | "workAuthorization"
+  | "healthTrainingCertificate"
   | "signature";
 
 const requiredUploadFields: DocumentUploadKey[] = [
@@ -52,12 +54,14 @@ const documentUploadFields: Array<{
   key: DocumentUploadKey;
   required: boolean;
 }> = [
-  { label: "Valid Driver’s License (Front)", key: "driverLicenseFront", required: true },
-  { label: "Valid Driver’s License (Back)", key: "driverLicenseBack", required: true },
-  { label: "Driver’s Abstract (last 3 years)", key: "driverAbstract", required: true },
-  { label: "Criminal Background Check", key: "backgroundCheck", required: true },
-  { label: "Proof of Address (Utility Bill or Bank Statement)", key: "proofOfAddress", required: true },
-  { label: "Resume (Optional but recommended)", key: "resume", required: false }
+  { label: "* Valid Driver’s License (Front page)", key: "driverLicenseFront", required: true },
+  { label: "* Valid Driver’s License (Back page)", key: "driverLicenseBack", required: true },
+  { label: "* Driver’s Abstract (last 3 years)", key: "driverAbstract", required: true },
+  { label: "* Criminal Background Check", key: "backgroundCheck", required: true },
+  { label: "*Proof of Address (Utility Bill or Bank Statement)", key: "proofOfAddress", required: true },
+  { label: "Resume (Optional but recommended)", key: "resume", required: false },
+  { label: "Proof of Work Authorization (For Canadian temporary residents)", key: "workAuthorization", required: false },
+  { label: "First Aid / CPR / PSW / Health or emergency training certificate", key: "healthTrainingCertificate", required: false }
 ];
 
 async function fileToDataUrl(file: File) {
@@ -91,6 +95,8 @@ function DriverApplicationFormPageContent() {
     backgroundCheck: null,
     proofOfAddress: null,
     resume: null,
+    workAuthorization: null,
+    healthTrainingCertificate: null,
     signature: null
   });
   const [form, setForm] = useState({
@@ -129,6 +135,8 @@ function DriverApplicationFormPageContent() {
     preferredWorkingHours: [] as string[],
     weeklyAvailability: "Flexible",
     serviceCapability: [] as string[],
+    healthEmergencyTraining: "no",
+    healthEmergencyTrainingDetails: "",
     ownVehicle: "no",
     criminalConsent: true,
     driverRecordConsent: true,
@@ -174,6 +182,12 @@ function DriverApplicationFormPageContent() {
       return;
     }
 
+    if (form.healthEmergencyTraining === "yes" && !uploadedFiles.healthTrainingCertificate) {
+      setError("Please upload your training certificate before submitting your application.");
+      setLoading(false);
+      return;
+    }
+
     const notes = [
       `Date of birth: ${form.dateOfBirth || "Not provided"}`,
       `City / postal code: ${form.city || "Not provided"} / ${form.postalCode || "Not provided"}`,
@@ -194,6 +208,12 @@ function DriverApplicationFormPageContent() {
       `Preferred working hours: ${form.preferredWorkingHours.join(", ") || "Not provided"}`,
       `Availability per week: ${form.weeklyAvailability}`,
       `Service capability: ${form.serviceCapability.join(", ") || "Not provided"}`,
+      `Proof of work authorization: ${uploadedFiles.workAuthorization ? `Uploaded - ${uploadedFiles.workAuthorization.name}` : "Not provided"}`,
+      `Health / emergency training: ${
+        form.healthEmergencyTraining === "yes"
+          ? `${form.healthEmergencyTrainingDetails || "Yes"} | Certificate: ${uploadedFiles.healthTrainingCertificate ? uploadedFiles.healthTrainingCertificate.name : "Not uploaded"}`
+          : "No"
+      }`,
       `Owns a vehicle: ${form.ownVehicle}`,
       `Consents - criminal: ${form.criminalConsent ? "Yes" : "No"}, driver record: ${form.driverRecordConsent ? "Yes" : "No"}, identity: ${form.identityConsent ? "Yes" : "No"}`,
       `Professional standards acknowledged: ${form.professionalStandards ? "Yes" : "No"}`,
@@ -210,6 +230,8 @@ function DriverApplicationFormPageContent() {
           ["BACKGROUND_CHECK", "Criminal background check", uploadedFiles.backgroundCheck],
           ["OTHER", "Proof of address", uploadedFiles.proofOfAddress],
           ["OTHER", "Resume", uploadedFiles.resume],
+          ["OTHER", "Proof of work authorization", uploadedFiles.workAuthorization],
+          ["OTHER", "Health or emergency training certificate", uploadedFiles.healthTrainingCertificate],
           ["OTHER", "Signature", uploadedFiles.signature]
         ]
           .filter(([, , file]) => file)
@@ -593,10 +615,82 @@ function DriverApplicationFormPageContent() {
                 </div>
               </div>
 
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-[#E5E7EB] p-4">
+                  <span className="mb-3 block text-sm font-medium text-slate-700">
+                    Are you certified in First Aid &amp; CPR, PSW, or any health/emergency related training?
+                  </span>
+                  <div className="flex gap-3">
+                    {[
+                      ["yes", "Yes"],
+                      ["no", "No"]
+                    ].map(([value, text]) => (
+                      <label key={value} className="flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="radio"
+                          name="healthEmergencyTraining"
+                          value={value}
+                          checked={form.healthEmergencyTraining === value}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              healthEmergencyTraining: event.target.value,
+                              healthEmergencyTrainingDetails:
+                                event.target.value === "yes" ? current.healthEmergencyTrainingDetails : ""
+                            }))
+                          }
+                        />
+                        {text}
+                      </label>
+                    ))}
+                  </div>
+
+                  {form.healthEmergencyTraining === "yes" ? (
+                    <label className="mt-4 block">
+                      <span className="mb-2 block text-sm font-medium text-slate-700">Training details</span>
+                      <input
+                        className="w-full rounded-2xl border border-[#E5E7EB] px-4 py-3 outline-none transition focus:border-[#2563EB]"
+                        value={form.healthEmergencyTrainingDetails}
+                        onChange={(event) =>
+                          setForm((current) => ({ ...current, healthEmergencyTrainingDetails: event.target.value }))
+                        }
+                        placeholder="Example: First Aid & CPR, PSW, emergency response"
+                      />
+                    </label>
+                  ) : null}
+                </div>
+
+                {form.healthEmergencyTraining === "yes" ? (
+                  <label className="block rounded-2xl border border-[#E5E7EB] p-4">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">Upload your certificate</span>
+                    <input
+                      type="file"
+                      accept={uploadAccept}
+                      className="block w-full rounded-2xl border border-[#E5E7EB] px-4 py-3 text-sm text-slate-600 file:mr-4 file:rounded-xl file:border-0 file:bg-[#EEF2FF] file:px-4 file:py-2 file:font-medium file:text-[#4338CA]"
+                      onChange={(event) =>
+                        setUploadedFiles((current) => ({
+                          ...current,
+                          healthTrainingCertificate: event.target.files?.[0] ?? null
+                        }))
+                      }
+                    />
+                    <span className="mt-2 block text-xs text-slate-500">
+                      {uploadedFiles.healthTrainingCertificate
+                        ? `Selected: ${uploadedFiles.healthTrainingCertificate.name}`
+                        : "Required when you select Yes."}
+                    </span>
+                  </label>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-[#D8DEEA] bg-[#F8FAFC] p-4 text-sm text-slate-500">
+                    If you hold First Aid, CPR, PSW, or related emergency-care training, select Yes and upload the certificate here.
+                  </div>
+                )}
+              </div>
+
               <div className="rounded-2xl border border-[#E5E7EB] p-5">
                 <div className="text-sm font-medium text-slate-700">Required documents</div>
                 <p className="mt-2 text-sm text-slate-500">
-                  Upload the required files from your computer. We will move these documents to secure cloud storage in a future S3 integration.
+                  Upload the required files from your computer or mobile phone.
                 </p>
                 <div className="mt-5 grid gap-4 md:grid-cols-2">
                   {documentUploadFields.map(({ label, key, required }) => {

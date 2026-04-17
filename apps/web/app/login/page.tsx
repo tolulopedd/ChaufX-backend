@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { AdminBrand } from "../../components/admin-brand";
 import {
   clearStoredDriverToken,
   clearStoredToken,
@@ -173,6 +174,7 @@ function LoginPageContent() {
     <main className="min-h-screen bg-[linear-gradient(180deg,#eef3fb_0%,#f8fafc_45%,#eef2ff_100%)] px-5 py-10">
       <div className="mx-auto max-w-xl">
         <section className="rounded-[36px] border border-[#E5E7EB] bg-white p-8 shadow-[0_30px_90px_-55px_rgba(15,23,42,0.24)] md:p-10">
+          <AdminBrand href="/" compact variant="login" />
           <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">{cardHeading.eyebrow}</div>
           <h1 className="mt-3 text-4xl font-semibold tracking-[-0.05em] text-[#0F172A]">{cardHeading.title}</h1>
 
@@ -426,6 +428,7 @@ export default function LoginPage() {
         <main className="min-h-screen bg-[linear-gradient(180deg,#eef3fb_0%,#f8fafc_45%,#eef2ff_100%)] px-5 py-10">
           <div className="mx-auto max-w-xl">
             <section className="rounded-[36px] border border-[#E5E7EB] bg-white p-8 shadow-[0_30px_90px_-55px_rgba(15,23,42,0.24)] md:p-10">
+              <AdminBrand href="/" compact variant="login" />
               <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">Login</div>
               <h1 className="mt-3 text-4xl font-semibold tracking-[-0.05em] text-[#0F172A]">Preparing sign in</h1>
               <p className="mt-4 text-sm leading-7 text-slate-600">Please wait while we load your access options.</p>

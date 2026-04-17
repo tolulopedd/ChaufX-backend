@@ -10,6 +10,8 @@ import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { createAuditLog } from "../../lib/audit.js";
 import { AppError } from "../../common/AppError.js";
 import { createDocumentAccessUrl, isS3DocumentReference } from "../../lib/document-storage.js";
+import { sendTransactionalEmail } from "../../lib/email.js";
+import { env } from "../../config/env.js";
 
 export const adminRoutes = Router();
 
@@ -33,6 +35,80 @@ const canadaRegions = [
 
 const provincePricingPrefix = "PROVINCE::";
 const cityPricingPrefix = "CITY::";
+
+function firstNameFromFullName(fullName: string) {
+  return fullName.trim().split(/\s+/)[0] ?? fullName.trim();
+}
+
+function buildDriverApplicationStatusEmail(params: {
+  decision: "approved" | "rejected" | "additional_info";
+  fullName: string;
+  email: string;
+  note: string;
+}) {
+  const firstName = firstNameFromFullName(params.fullName);
+  const statusUrl = new URL("/driver/status", env.CLIENT_APP_URL);
+  statusUrl.searchParams.set("email", params.email);
+  const loginUrl = new URL("/driver/login", env.CLIENT_APP_URL);
+
+  if (params.decision === "approved") {
+    return {
+      subject: "Your DriveMe Canada driver application has been approved",
+      html: `
+        <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
+          <p style="margin: 0 0 16px;">Dear ${firstName},</p>
+          <p style="margin: 0 0 16px;">Your DriveMe Canada driver application has been approved.</p>
+          <p style="margin: 0 0 16px;">${params.note}</p>
+          <p style="margin: 24px 0;">
+            <a href="${loginUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+              Go to driver login
+            </a>
+          </p>
+          <p style="margin: 0 0 12px;">You can also review your onboarding status here:</p>
+          <p style="margin: 0;"><a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer">${statusUrl.toString()}</a></p>
+        </div>
+      `,
+      text: `Dear ${firstName}, your DriveMe Canada driver application has been approved. ${params.note} Driver login: ${loginUrl.toString()} Status page: ${statusUrl.toString()}`
+    };
+  }
+
+  if (params.decision === "additional_info") {
+    return {
+      subject: "Additional information is required for your DriveMe Canada application",
+      html: `
+        <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
+          <p style="margin: 0 0 16px;">Dear ${firstName},</p>
+          <p style="margin: 0 0 16px;">Additional information is required to continue reviewing your DriveMe Canada driver application.</p>
+          <p style="margin: 0 0 16px;">${params.note}</p>
+          <p style="margin: 24px 0;">
+            <a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+              Check application status
+            </a>
+          </p>
+          <p style="margin: 0;">Please review the note above and follow the next steps shared by the DriveMe team.</p>
+        </div>
+      `,
+      text: `Dear ${firstName}, additional information is required to continue reviewing your DriveMe Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
+    };
+  }
+
+  return {
+    subject: "Update on your DriveMe Canada driver application",
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
+        <p style="margin: 0 0 16px;">Dear ${firstName},</p>
+        <p style="margin: 0 0 16px;">There is an update on your DriveMe Canada driver application.</p>
+        <p style="margin: 0 0 16px;">${params.note}</p>
+        <p style="margin: 24px 0;">
+          <a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+            Check application status
+          </a>
+        </p>
+      </div>
+    `,
+    text: `Dear ${firstName}, there is an update on your DriveMe Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
+  };
+}
 
 function encodePricingKeyPart(value: string) {
   return encodeURIComponent(value.trim());
@@ -274,6 +350,24 @@ adminRoutes.post(
       entityId: application.id,
       details: { note: input.note }
     });
+
+    try {
+      const emailMessage = buildDriverApplicationStatusEmail({
+        decision: input.decision,
+        fullName: application.fullName,
+        email: application.email,
+        note: input.note
+      });
+
+      await sendTransactionalEmail({
+        to: application.email,
+        subject: emailMessage.subject,
+        html: emailMessage.html,
+        text: emailMessage.text
+      });
+    } catch (error) {
+      console.error("Unable to send driver application review email", error);
+    }
 
     response.json(result);
   })
