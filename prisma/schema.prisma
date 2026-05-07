@@ -35,6 +35,11 @@ enum BookingStatus {
   CANCELLED
 }
 
+enum BookingRequestType {
+  NOW
+  LATER
+}
+
 enum TripStatus {
   SCHEDULED
   ACTIVE
@@ -232,6 +237,7 @@ model Booking {
   customerId              String
   vehicleId               String?
   assignedDriverId        String?
+  requestType             BookingRequestType @default(NOW)
   pickupLocation          String
   pickupLat               Float
   pickupLng               Float

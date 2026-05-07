@@ -53,11 +53,11 @@ function buildDriverApplicationStatusEmail(params: {
 
   if (params.decision === "approved") {
     return {
-      subject: "Your DriveMe Canada driver application has been approved",
+      subject: "Your ChaufX Canada driver application has been approved",
       html: `
         <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
           <p style="margin: 0 0 16px;">Dear ${firstName},</p>
-          <p style="margin: 0 0 16px;">Your DriveMe Canada driver application has been approved.</p>
+          <p style="margin: 0 0 16px;">Your ChaufX Canada driver application has been approved.</p>
           <p style="margin: 0 0 16px;">${params.note}</p>
           <p style="margin: 24px 0;">
             <a href="${loginUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
@@ -68,36 +68,36 @@ function buildDriverApplicationStatusEmail(params: {
           <p style="margin: 0;"><a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer">${statusUrl.toString()}</a></p>
         </div>
       `,
-      text: `Dear ${firstName}, your DriveMe Canada driver application has been approved. ${params.note} Driver login: ${loginUrl.toString()} Status page: ${statusUrl.toString()}`
+      text: `Dear ${firstName}, your ChaufX Canada driver application has been approved. ${params.note} Driver login: ${loginUrl.toString()} Status page: ${statusUrl.toString()}`
     };
   }
 
   if (params.decision === "additional_info") {
     return {
-      subject: "Additional information is required for your DriveMe Canada application",
+      subject: "Additional information is required for your ChaufX Canada application",
       html: `
         <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
           <p style="margin: 0 0 16px;">Dear ${firstName},</p>
-          <p style="margin: 0 0 16px;">Additional information is required to continue reviewing your DriveMe Canada driver application.</p>
+          <p style="margin: 0 0 16px;">Additional information is required to continue reviewing your ChaufX Canada driver application.</p>
           <p style="margin: 0 0 16px;">${params.note}</p>
           <p style="margin: 24px 0;">
             <a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
               Check application status
             </a>
           </p>
-          <p style="margin: 0;">Please review the note above and follow the next steps shared by the DriveMe team.</p>
+          <p style="margin: 0;">Please review the note above and follow the next steps shared by the ChaufX team.</p>
         </div>
       `,
-      text: `Dear ${firstName}, additional information is required to continue reviewing your DriveMe Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
+      text: `Dear ${firstName}, additional information is required to continue reviewing your ChaufX Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
     };
   }
 
   return {
-    subject: "Update on your DriveMe Canada driver application",
+    subject: "Update on your ChaufX Canada driver application",
     html: `
       <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
         <p style="margin: 0 0 16px;">Dear ${firstName},</p>
-        <p style="margin: 0 0 16px;">There is an update on your DriveMe Canada driver application.</p>
+        <p style="margin: 0 0 16px;">There is an update on your ChaufX Canada driver application.</p>
         <p style="margin: 0 0 16px;">${params.note}</p>
         <p style="margin: 24px 0;">
           <a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
@@ -106,7 +106,7 @@ function buildDriverApplicationStatusEmail(params: {
         </p>
       </div>
     `,
-    text: `Dear ${firstName}, there is an update on your DriveMe Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
+    text: `Dear ${firstName}, there is an update on your ChaufX Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
   };
 }
 
@@ -207,6 +207,11 @@ adminRoutes.get(
           status: "ACTIVE"
         },
         include: {
+          customer: {
+            include: {
+              user: true
+            }
+          },
           assignedDriver: {
             include: {
               user: true

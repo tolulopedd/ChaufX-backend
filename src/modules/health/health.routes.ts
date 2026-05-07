@@ -6,7 +6,7 @@ export const healthRoutes = Router();
 healthRoutes.get("/health", (_request, response) => {
   response.json({
     ok: true,
-    service: "driveme-api"
+    service: "chaufx-api"
   });
 });
 

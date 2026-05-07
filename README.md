@@ -1,6 +1,6 @@
-# DriveMe API
+# ChaufX API
 
-Express + Prisma backend for the DriveMe MVP.
+Express + Prisma backend for the ChaufX MVP.
 
 ## Modules
 
@@ -18,8 +18,8 @@ Express + Prisma backend for the DriveMe MVP.
 ## Local commands
 
 ```bash
-npm run dev -w @driveme/api
-npm run prisma:generate -w @driveme/api
-npm run prisma:migrate -w @driveme/api
-npm run seed -w @driveme/api
+npm run dev -w @chaufx/api
+npm run prisma:generate -w @chaufx/api
+npm run prisma:migrate -w @chaufx/api
+npm run seed -w @chaufx/api
 ```

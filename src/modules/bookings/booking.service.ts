@@ -3,8 +3,100 @@ import { appConfig, buildActivationWindow, isTripWindowActive } from "../../lib/
 import { AppError } from "../../common/AppError.js";
 import { prisma } from "../../lib/prisma.js";
 
-export function calculateFareEstimate(expectedDurationMinutes: number) {
-  return Number((18 + expectedDurationMinutes * 0.85).toFixed(2));
+const provincePricingPrefix = "PROVINCE::";
+const cityPricingPrefix = "CITY::";
+
+function decodePricingKeyPart(value: string) {
+  return decodeURIComponent(value);
+}
+
+function inferServiceRegion(zoneCode: string, pickupLocation?: string, destinationLocation?: string) {
+  const combined = `${pickupLocation ?? ""} ${destinationLocation ?? ""}`.toLowerCase();
+
+  if (zoneCode.startsWith("WPG-") || combined.includes("winnipeg")) {
+    return { province: "Manitoba", city: "Winnipeg" };
+  }
+
+  return { province: "Manitoba", city: undefined as string | undefined };
+}
+
+export async function resolveBookingPricing(params: {
+  zoneCode: string;
+  expectedDurationMinutes: number;
+  pickupLocation?: string;
+  destinationLocation?: string;
+}) {
+  const region = inferServiceRegion(params.zoneCode, params.pickupLocation, params.destinationLocation);
+  const settings = await prisma.pricingSetting.findMany({
+    where: {
+      OR: [
+        { code: { startsWith: provincePricingPrefix } },
+        { code: { startsWith: cityPricingPrefix } }
+      ]
+    },
+    select: {
+      code: true,
+      value: true
+    }
+  });
+
+  let provinceFlatFee = 29;
+  let provinceMinHours = 2;
+  let cityFlatFee: number | null = null;
+  let cityMinHours: number | null = null;
+
+  for (const setting of settings) {
+    if (setting.code.startsWith(provincePricingPrefix)) {
+      const [, encodedProvince, kind] = setting.code.split("::");
+      const province = decodePricingKeyPart(encodedProvince);
+
+      if (province !== region.province) {
+        continue;
+      }
+
+      if (kind === "FLAT_FEE") {
+        provinceFlatFee = setting.value;
+      }
+
+      if (kind === "MIN_HOURS") {
+        provinceMinHours = setting.value;
+      }
+    }
+
+    if (region.city && setting.code.startsWith(cityPricingPrefix)) {
+      const [, encodedProvince, encodedCity, kind] = setting.code.split("::");
+      const province = decodePricingKeyPart(encodedProvince);
+      const city = decodePricingKeyPart(encodedCity);
+
+      if (province !== region.province || city.toLowerCase() !== region.city.toLowerCase()) {
+        continue;
+      }
+
+      if (kind === "FLAT_FEE") {
+        cityFlatFee = setting.value;
+      }
+
+      if (kind === "MIN_HOURS") {
+        cityMinHours = setting.value;
+      }
+    }
+  }
+
+  const flatFee = cityFlatFee ?? provinceFlatFee;
+  const minHours = cityMinHours ?? provinceMinHours;
+  const requestedHours = Math.max(1, Math.ceil(params.expectedDurationMinutes / 60));
+  const billableHours = Math.max(requestedHours, minHours);
+  const fareEstimate = Number((flatFee * billableHours).toFixed(2));
+
+  return {
+    province: region.province,
+    city: region.city,
+    flatFee,
+    minHours,
+    requestedHours,
+    billableHours,
+    fareEstimate
+  };
 }
 
 export function windowsOverlap(startA: Date, endA: Date, startB: Date, endB: Date) {
@@ -118,6 +210,7 @@ export function mapStateForBooking(booking: {
 export async function createBookingRecord(input: {
   customerId: string;
   vehicleId?: string;
+  requestType: "NOW" | "LATER";
   pickupLocation: string;
   pickupLat: number;
   pickupLng: number;
@@ -131,11 +224,18 @@ export async function createBookingRecord(input: {
   zoneCode: string;
 }) {
   const activationWindow = buildActivationWindow(input.scheduledStartAt, input.expectedDurationMinutes);
+  const pricing = await resolveBookingPricing({
+    zoneCode: input.zoneCode,
+    expectedDurationMinutes: input.expectedDurationMinutes,
+    pickupLocation: input.pickupLocation,
+    destinationLocation: input.destinationLocation
+  });
 
   const booking = await prisma.booking.create({
     data: {
       customerId: input.customerId,
       vehicleId: input.vehicleId,
+      requestType: input.requestType,
       pickupLocation: input.pickupLocation,
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
@@ -147,7 +247,7 @@ export async function createBookingRecord(input: {
       specialNotes: input.specialNotes,
       vehicleDetails: input.vehicleDetails,
       zoneCode: input.zoneCode,
-      fareEstimate: calculateFareEstimate(input.expectedDurationMinutes),
+      fareEstimate: pricing.fareEstimate,
       activationWindowStartAt: activationWindow.startsAt,
       activationWindowEndAt: activationWindow.endsAt
     }

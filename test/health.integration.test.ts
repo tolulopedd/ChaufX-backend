@@ -26,7 +26,7 @@ describe("health routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.payload).toEqual({
       ok: true,
-      service: "driveme-api"
+      service: "chaufx-api"
     });
   });
 

@@ -49,8 +49,8 @@ async function main() {
 
   const admin = await prisma.user.create({
     data: {
-      fullName: "DriveMe Admin",
-      email: "admin@driveme.com",
+      fullName: "ChaufX Admin",
+      email: "admin@chaufx.com",
       phone: "+12045550110",
       passwordHash: await hashPassword("NewPass123$"),
       role: UserRole.ADMIN,
@@ -68,7 +68,7 @@ async function main() {
   const customer = await prisma.user.create({
     data: {
       fullName: "Jordan Vehicle Owner",
-      email: "owner@driveme.app",
+      email: "owner@chaufx.app",
       phone: "+12045550111",
       passwordHash: await hashPassword("OwnerPass123$"),
       role: UserRole.CUSTOMER,
@@ -101,7 +101,7 @@ async function main() {
   const driverUser = await prisma.user.create({
     data: {
       fullName: "Avery Approved Driver",
-      email: "driver@driveme.app",
+      email: "driver@chaufx.app",
       phone: "+12045550112",
       passwordHash: await hashPassword("DriverPass123$"),
       role: UserRole.DRIVER,
@@ -168,6 +168,7 @@ async function main() {
     data: {
       customerId: customer.customerProfile!.id,
       vehicleId: vehicle.id,
+      requestType: "LATER",
       pickupLocation: "201 Portage Ave, Winnipeg",
       pickupLat: 49.8959,
       pickupLng: -97.1385,
@@ -199,6 +200,7 @@ async function main() {
       customerId: customer.customerProfile!.id,
       vehicleId: vehicle.id,
       assignedDriverId: driver.id,
+      requestType: "NOW",
       pickupLocation: "275 Broadway, Winnipeg",
       pickupLat: 49.8844,
       pickupLng: -97.1423,

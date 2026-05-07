@@ -1,5 +1,5 @@
 export const apiDocs = {
-  name: "DriveMe API",
+  name: "ChaufX API",
   version: "0.1.0",
   modules: [
     "auth",

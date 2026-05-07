@@ -7,16 +7,17 @@ import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { AppError } from "../../common/AppError.js";
 import {
-  calculateFareEstimate,
   createBookingRecord,
   driverHasOverlap,
   ensureCustomerCanCancel,
-  findEligibleDrivers
+  findEligibleDrivers,
+  resolveBookingPricing
 } from "./booking.service.js";
 import { createAuditLog } from "../../lib/audit.js";
 
 export const createBookingSchema = z.object({
   vehicleId: z.string().uuid().optional(),
+  requestType: z.enum(["NOW", "LATER"]),
   pickupLocation: z.string().min(3),
   pickupLat: z.coerce.number(),
   pickupLng: z.coerce.number(),
@@ -24,7 +25,7 @@ export const createBookingSchema = z.object({
   destinationLat: z.coerce.number(),
   destinationLng: z.coerce.number(),
   scheduledStartAt: z.coerce.date(),
-  expectedDurationMinutes: z.coerce.number().int().min(15),
+  expectedDurationMinutes: z.coerce.number().int().min(60),
   specialNotes: z.string().optional(),
   vehicleDetails: z.string().optional(),
   zoneCode: z.string().min(3)
@@ -32,7 +33,7 @@ export const createBookingSchema = z.object({
 
 const estimateBookingSchema = z.object({
   scheduledStartAt: z.coerce.date(),
-  expectedDurationMinutes: z.coerce.number().int().min(15),
+  expectedDurationMinutes: z.coerce.number().int().min(60),
   zoneCode: z.string().min(3)
 });
 
@@ -46,14 +47,24 @@ bookingsRoutes.post(
   asyncHandler(async (request, response) => {
     const input = estimateBookingSchema.parse(request.body);
     const activationWindow = buildActivationWindow(input.scheduledStartAt, input.expectedDurationMinutes);
+    const pricing = await resolveBookingPricing({
+      zoneCode: input.zoneCode,
+      expectedDurationMinutes: input.expectedDurationMinutes
+    });
 
     response.json({
-      fareEstimate: calculateFareEstimate(input.expectedDurationMinutes),
+      fareEstimate: pricing.fareEstimate,
       currency: "CAD",
       zoneCode: input.zoneCode,
+      flatFeePerHour: pricing.flatFee,
+      minHours: pricing.minHours,
+      requestedHours: pricing.requestedHours,
+      billableHours: pricing.billableHours,
+      pricingProvince: pricing.province,
+      pricingCity: pricing.city,
       activationWindowStartAt: activationWindow.startsAt.toISOString(),
       activationWindowEndAt: activationWindow.endsAt.toISOString(),
-      pricingNote: "All rates are billed in CAD. No surge pricing is applied after booking confirmation."
+      pricingNote: `All rates are billed in CAD. ${pricing.billableHours} hour${pricing.billableHours === 1 ? "" : "s"} billed at $${pricing.flatFee}/hour. No surge pricing is applied after booking confirmation.`
     });
   })
 );
@@ -97,13 +108,17 @@ bookingsRoutes.post(
         data: drivers.map((driver) => ({
           userId: driver.userId,
           type: "BOOKING_SUBMITTED",
-          title: "New driver request",
-          body: `${booking.pickupLocation} to ${booking.destinationLocation}`,
+          title: input.requestType === "NOW" ? "ChaufX now request" : "Scheduled drive request",
+          body:
+            input.requestType === "NOW"
+              ? `${booking.pickupLocation} to ${booking.destinationLocation} · starting soon`
+              : `${booking.pickupLocation} to ${booking.destinationLocation} · ${booking.scheduledStartAt.toLocaleString()}`,
           channel: "PUSH",
           status: "PENDING",
           meta: {
             bookingId: booking.id,
-            distanceKm: driver.distanceKm
+            distanceKm: driver.distanceKm,
+            requestType: booking.requestType
           }
         }))
       });
@@ -114,12 +129,16 @@ bookingsRoutes.post(
         userId: request.auth!.userId,
         type: "BOOKING_SUBMITTED",
         title: "Booking submitted",
-        body: "We have started notifying the nearest eligible approved drivers.",
+        body:
+          input.requestType === "NOW"
+            ? "We are routing your ChaufX now request to the nearest eligible drivers."
+            : "We are routing your scheduled drive to the nearest eligible drivers.",
         channel: "IN_APP",
         status: "SENT",
         meta: {
           bookingId: booking.id,
-          notifiedDrivers: drivers.length
+          notifiedDrivers: drivers.length,
+          requestType: booking.requestType
         }
       }
     });
