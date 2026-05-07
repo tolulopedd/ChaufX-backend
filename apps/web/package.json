@@ -1,5 +1,5 @@
 {
-  "name": "@driveme/web",
+  "name": "@chaufx/web",
   "private": true,
   "version": "0.1.0",
   "scripts": {
@@ -9,8 +9,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@driveme/design-tokens": "*",
-    "@driveme/ui": "*",
+    "@chaufx/design-tokens": "*",
+    "@chaufx/ui": "*",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

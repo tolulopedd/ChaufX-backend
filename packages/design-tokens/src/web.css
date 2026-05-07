@@ -1,16 +1,16 @@
 :root {
-  --driveme-blue-50: #eef3ff;
-  --driveme-blue-100: #dce6ff;
-  --driveme-blue-500: #2f6bff;
-  --driveme-blue-600: #204bdb;
-  --driveme-blue-700: #1636ab;
-  --driveme-blue-900: #142765;
-  --driveme-accent: #10b981;
-  --driveme-surface: #ffffff;
-  --driveme-surface-muted: #f5f8ff;
-  --driveme-ink: #081120;
-  --driveme-muted: #64748b;
-  --driveme-border: #d8e0f2;
-  --driveme-warning: #f59e0b;
-  --driveme-danger: #dc2626;
+  --chaufx-blue-50: #eef3ff;
+  --chaufx-blue-100: #dce6ff;
+  --chaufx-blue-500: #2f6bff;
+  --chaufx-blue-600: #204bdb;
+  --chaufx-blue-700: #1636ab;
+  --chaufx-blue-900: #142765;
+  --chaufx-accent: #10b981;
+  --chaufx-surface: #ffffff;
+  --chaufx-surface-muted: #f5f8ff;
+  --chaufx-ink: #081120;
+  --chaufx-muted: #64748b;
+  --chaufx-border: #d8e0f2;
+  --chaufx-warning: #f59e0b;
+  --chaufx-danger: #dc2626;
 }

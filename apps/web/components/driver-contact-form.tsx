@@ -68,7 +68,7 @@ export function DriverContactForm({
                 subject: form.subject || undefined,
                 message: form.message
               });
-              setStatus("Your message has been sent to the DriveMe admin team.");
+              setStatus("Your message has been sent to the ChaufX admin team.");
               setForm({
                 fullName: "",
                 email: "",

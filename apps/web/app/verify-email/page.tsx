@@ -48,7 +48,7 @@ function VerifyEmailPageContent() {
 
         setVerifiedPurpose("customer");
         setStatus("success");
-        setMessage("Your email has been verified. Welcome to DriveMe Canada. You can now sign in to your account.");
+        setMessage("Your email has been verified. Welcome to ChaufX Canada. You can now sign in to your account.");
         window.setTimeout(() => {
           router.replace(`/login?verified=1&email=${encodeURIComponent(result.email)}`);
         }, 1400);
@@ -70,7 +70,7 @@ function VerifyEmailPageContent() {
   }, [router, token]);
 
   return (
-    <PublicPageShell heroTitle="Verify email" heroCopy="Complete your email verification to continue with DriveMe.">
+    <PublicPageShell heroTitle="Verify email" heroCopy="Complete your email verification to continue with ChaufX.">
       <section className="bg-white">
         <div className="mx-auto max-w-3xl px-5 py-16 md:px-8">
           <div
@@ -107,7 +107,7 @@ function VerifyEmailPageContent() {
                   {verifiedPurpose === "driver" ? "Driver onboarding verified" : "Customer email verified"}
                 </div>
                 <h1 className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-[#0F172A]">
-                  {verifiedPurpose === "driver" ? "You’re ready for the next step." : "Welcome to DriveMe Canada."}
+                  {verifiedPurpose === "driver" ? "You’re ready for the next step." : "Welcome to ChaufX Canada."}
                 </h1>
                 <p className="mt-4 text-sm leading-7 text-slate-600">{message}</p>
                 {verifiedPurpose === "driver" ? (
@@ -164,7 +164,7 @@ export default function VerifyEmailPage() {
   return (
     <Suspense
       fallback={
-        <PublicPageShell heroTitle="Verify email" heroCopy="Complete your email verification to continue with DriveMe.">
+        <PublicPageShell heroTitle="Verify email" heroCopy="Complete your email verification to continue with ChaufX.">
           <section className="bg-white">
             <div className="mx-auto max-w-3xl px-5 py-16 md:px-8">
               <div className="rounded-[30px] border border-[#E5E7EB] bg-white p-8 text-center shadow-[0_24px_70px_-50px_rgba(15,23,42,0.18)]">

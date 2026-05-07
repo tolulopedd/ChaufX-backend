@@ -5,7 +5,7 @@ export default function BookingPage() {
   return (
     <PublicPageShell
       heroTitle="Book Online"
-      heroCopy="DriveMe keeps online booking short and simple, whether you need a driver now or want to schedule ahead."
+      heroCopy="ChaufX keeps online booking short and simple, whether you need a driver now or want to schedule ahead."
     >
       <section className="bg-white">
         <div className="mx-auto max-w-5xl px-5 py-12 md:px-8">
@@ -27,7 +27,7 @@ export default function BookingPage() {
           <div className="mt-8 rounded-[28px] border border-[#E5E7EB] bg-[#F8FAFC] p-6">
             <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">Customer access</div>
             <p className="mt-3 text-sm leading-7 text-slate-600">
-              Customer booking is completed through the DriveMe mobile experience. Use this website to understand the service, pricing, and booking flow before using the app.
+              Customer booking is completed through the ChaufX mobile experience. Use this website to understand the service, pricing, and booking flow before using the app.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Link href="/how-it-works" className="rounded-full bg-[#2563EB] px-5 py-3 text-sm font-semibold text-white">

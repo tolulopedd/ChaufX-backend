@@ -1,5 +1,5 @@
 export const appConfig = {
-  brandName: "DriveMe",
+  brandName: "ChaufX",
   tripActivationMinutesBeforeStart: 15,
   tripCompletionGraceMinutes: 30,
   defaultCurrency: "CAD",

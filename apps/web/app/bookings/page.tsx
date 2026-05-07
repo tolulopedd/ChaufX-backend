@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { appConfig, toCurrency } from "@driveme/config";
+import { appConfig, toCurrency } from "@chaufx/config";
 import { AdminShell, Panel } from "../../components/admin-shell";
 import { EmptyState, StatCard, StatusPill } from "../../components/admin-primitives";
 import { adminFetch, useAdminResource } from "../../lib/api";
@@ -14,6 +14,10 @@ const statusToneMap: Record<string, "violet" | "amber" | "emerald" | "rose" | "n
   COMPLETED: "emerald",
   CANCELLED: "rose"
 };
+
+function requestTypeLabel(value?: string) {
+  return value === "LATER" ? "Schedule later" : "ChaufX now";
+}
 
 function getLifecycleActions(status: string) {
   switch (status) {
@@ -91,6 +95,7 @@ export default function BookingsPage() {
   const [busyBookingId, setBusyBookingId] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [requestTypeFilter, setRequestTypeFilter] = useState("ALL");
   const [dateFilter, setDateFilter] = useState("");
 
   const assignedCount = bookings.filter((booking) => booking.assignedDriverId).length;
@@ -110,6 +115,10 @@ export default function BookingsPage() {
 
     return bookings.filter((booking) => {
       if (statusFilter !== "ALL" && booking.status !== statusFilter) {
+        return false;
+      }
+
+      if (requestTypeFilter !== "ALL" && booking.requestType !== requestTypeFilter) {
         return false;
       }
 
@@ -135,7 +144,7 @@ export default function BookingsPage() {
 
       return haystack.includes(query);
     });
-  }, [bookings, dateFilter, search, statusFilter]);
+  }, [bookings, dateFilter, requestTypeFilter, search, statusFilter]);
 
   const selectedBooking = useMemo(
     () => filteredBookings.find((booking) => booking.id === selectedId) ?? bookings.find((booking) => booking.id === selectedId) ?? null,
@@ -191,13 +200,22 @@ export default function BookingsPage() {
         {loading ? <p className="text-sm text-slate-500">Loading bookings...</p> : null}
         {error ? <p className="text-sm text-amber-600">{error}</p> : null}
 
-        <div className="mb-4 grid gap-3 md:grid-cols-[1.4fr_0.8fr_0.8fr]">
+        <div className="mb-4 grid gap-3 md:grid-cols-[1.2fr_0.8fr_0.7fr_0.8fr]">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Filter by customer, driver, pickup, destination"
             className="w-full rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm outline-none transition focus:border-[#4F46E5]"
           />
+          <select
+            value={requestTypeFilter}
+            onChange={(event) => setRequestTypeFilter(event.target.value)}
+            className="w-full rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm outline-none transition focus:border-[#4F46E5]"
+          >
+            <option value="ALL">All request types</option>
+            <option value="NOW">ChaufX now</option>
+            <option value="LATER">Schedule later</option>
+          </select>
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
@@ -237,6 +255,7 @@ export default function BookingsPage() {
                       {booking.customer.user.fullName} · {formatDate(booking.scheduledStartAt)}
                     </div>
                     <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
+                      <span>{requestTypeLabel(booking.requestType)}</span>
                       <span>{booking.assignedDriver?.user.fullName ?? "Unassigned"}</span>
                       <span>{toCurrency(Number(booking.fareEstimate), "CAD")}</span>
                       <span>{booking.dispatches?.length ?? 0} routed driver{booking.dispatches?.length === 1 ? "" : "s"}</span>
@@ -303,6 +322,7 @@ export default function BookingsPage() {
                 title="Booking overview"
                 fields={[
                   { label: "Customer", value: selectedBooking.customer.user.fullName },
+                  { label: "Request type", value: requestTypeLabel(selectedBooking.requestType) },
                   { label: "Assigned driver", value: selectedBooking.assignedDriver?.user.fullName ?? "Unassigned" },
                   { label: "Estimated fare", value: toCurrency(Number(selectedBooking.fareEstimate), "CAD") },
                   { label: "Vehicle", value: selectedBooking.vehicleDetails ?? "Customer vehicle" },

@@ -3,8 +3,8 @@ import Link from "next/link";
 import { PublicPageShell } from "../components/public-page-shell";
 
 export const metadata: Metadata = {
-  title: "DriveMe",
-  description: "DriveMe Canada public website."
+  title: "ChaufX",
+  description: "ChaufX Canada public website."
 };
 
 const services = [
@@ -26,7 +26,7 @@ const services = [
   },
   {
     title: "Corporate chauffeur",
-    body: "Use DriveMe for fleet movement, executive transport, and vehicle transfer services for businesses."
+    body: "Use ChaufX for fleet movement, executive transport, and vehicle transfer services for businesses."
   },
   {
     title: "Business meetings",
@@ -37,7 +37,7 @@ const services = [
 const policies = [
   {
     title: "Privacy policy",
-    body: "DriveMe handles personal information through controlled access, secure processing, and limited operational use."
+    body: "ChaufX handles personal information through controlled access, secure processing, and limited operational use."
   },
   {
     title: "Information collection",
@@ -107,7 +107,7 @@ const portals = [
   {
     eyebrow: "Login",
     title: "Access your account",
-    body: "Use one login page for approved driver and admin accounts. DriveMe routes you by role after sign-in.",
+    body: "Use one login page for approved driver and admin accounts. ChaufX routes you by role after sign-in.",
     href: "/login",
     cta: "Login"
   }
@@ -117,7 +117,7 @@ export default function HomePage() {
   return (
     <PublicPageShell
       heroTitle="Driver Services on demand"
-      heroCopy="DriveMe is a Canadian personal chauffeur service that lets customers book professional drivers for their own vehicles, while giving chauffeurs and operators a simple platform to work from."
+      heroCopy="ChaufX is a Canadian personal chauffeur service that lets customers book professional drivers for their own vehicles, while giving chauffeurs and operators a simple platform to work from."
       heroTagline="Your Car, Your Convenience, Your Safety"
     >
       <section className="bg-white">
@@ -147,7 +147,7 @@ export default function HomePage() {
               Simple chauffeur service in your own vehicle.
             </h2>
             <p className="mt-4 text-base leading-7 text-slate-600">
-              DriveMe is built for customers who want a professional driver without giving up the comfort, privacy, and convenience of their own car.
+              ChaufX is built for customers who want a professional driver without giving up the comfort, privacy, and convenience of their own car.
             </p>
           </div>
 
@@ -173,12 +173,12 @@ export default function HomePage() {
       <section id="about" className="bg-white">
         <div className="mx-auto max-w-7xl px-5 py-6 md:px-8">
           <div className="rounded-[30px] border border-[#E5E7EB] bg-white p-7 shadow-[0_24px_70px_-50px_rgba(15,23,42,0.18)]">
-            <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">About DriveMe</div>
+            <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">About ChaufX</div>
             <h2 className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-[#0F172A]">
               Professional driving for your everyday plans and important journeys.
             </h2>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">
-              Whether it is a personal errand, a night out, a medical appointment, a busy workday, or a longer trip, DriveMe helps you reclaim your time while a vetted chauffeur drives your vehicle.
+              Whether it is a personal errand, a night out, a medical appointment, a busy workday, or a longer trip, ChaufX helps you reclaim your time while a vetted chauffeur drives your vehicle.
             </p>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
               We focus on simple booking, reliable arrival, senior-friendly service, and a clean operating system for approved chauffeurs and admins.
@@ -214,7 +214,7 @@ export default function HomePage() {
               Use the path that fits your role.
             </h2>
             <p className="mt-4 text-base leading-7 text-slate-600">
-              Once you know what DriveMe is about, use the right entry point for onboarding, login, or platform control.
+              Once you know what ChaufX is about, use the right entry point for onboarding, login, or platform control.
             </p>
           </div>
 

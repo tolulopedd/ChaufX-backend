@@ -4,10 +4,13 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
-      "@driveme/config": [
+      "@chaufx/config": [
         "../../packages/config/src"
       ],
-      "@driveme/ui": [
+      "@chaufx/types": [
+        "../../packages/types/src"
+      ],
+      "@chaufx/ui": [
         "../../packages/ui/src"
       ]
     }

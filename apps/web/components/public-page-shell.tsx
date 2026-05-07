@@ -31,7 +31,7 @@ export function PublicPageShell({ children, heroTitle, heroCopy, heroTagline }: 
           <div className="px-1 py-10 md:px-2 md:py-12 lg:py-16">
             <div className="max-w-3xl rounded-[28px] bg-[linear-gradient(135deg,rgba(5,11,21,0.36),rgba(5,11,21,0.08))] p-2 md:p-4">
               <div className="text-base font-semibold uppercase tracking-[0.38em] text-white/78 [text-shadow:0_2px_18px_rgba(5,11,21,0.75)] md:text-lg">
-                DriveMe Canada
+                ChaufX Canada
               </div>
               <h1 className="mt-4 text-4xl font-semibold tracking-[-0.06em] text-white [text-shadow:0_6px_28px_rgba(5,11,21,0.85)] md:text-6xl">
                 {heroTitle}

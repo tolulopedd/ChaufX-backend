@@ -1,5 +1,5 @@
 {
-  "name": "driveme-platform",
+  "name": "chaufx-platform",
   "private": true,
   "version": "0.1.0",
   "workspaces": [
@@ -10,10 +10,10 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:api": "npm run dev -w @driveme/api",
-    "dev:web": "npm run dev -w @driveme/web",
-    "dev:customer-mobile": "npm run dev -w @driveme/customer-mobile -- --port 8081",
-    "dev:driver-mobile": "npm run dev -w @driveme/driver-mobile -- --port 8082",
+    "dev:api": "npm run dev -w @chaufx/api",
+    "dev:web": "npm run dev -w @chaufx/web",
+    "dev:customer-mobile": "npm run dev -w @chaufx/customer-mobile -- --port 8081",
+    "dev:driver-mobile": "npm run dev -w @chaufx/driver-mobile -- --port 8082",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"

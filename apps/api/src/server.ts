@@ -23,7 +23,7 @@ async function boot() {
   await prisma.$connect();
 
   server.listen(env.PORT, env.HOST, () => {
-    console.log(`DriveMe API running on http://${env.HOST}:${env.PORT}`);
+    console.log(`ChaufX API running on http://${env.HOST}:${env.PORT}`);
   });
 }
 

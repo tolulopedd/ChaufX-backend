@@ -1,7 +1,7 @@
-import type { BookingStatus, DriverApplicationStatus } from "@driveme/types";
+import type { BookingStatus, DriverApplicationStatus } from "@chaufx/types";
 
 export const brand = {
-  name: "DriveMe",
+  name: "ChaufX",
   accent: "#4f46e5",
   accentDeep: "#4338ca",
   accentSoft: "#eef0ff",

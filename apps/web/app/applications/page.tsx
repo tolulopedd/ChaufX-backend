@@ -233,7 +233,7 @@ export default function ApplicationsPage() {
                       title: "Approve application",
                       prompt: "Add a personal note to the driver for this approval."
                     });
-                    setReviewNote("Your application has been approved. Welcome to DriveMe.");
+                    setReviewNote("Your application has been approved. Welcome to ChaufX.");
                     setNotice("");
                   }}
                   className="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"

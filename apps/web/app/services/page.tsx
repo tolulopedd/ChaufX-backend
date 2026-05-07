@@ -24,7 +24,7 @@ const services = [
   {
     id: "corporate-chauffeur",
     title: "Corporate chauffeur",
-    body: "Use DriveMe for fleet movement, executive transport, and vehicle transfer services for business operations."
+    body: "Use ChaufX for fleet movement, executive transport, and vehicle transfer services for business operations."
   },
   {
     id: "business-meetings",
@@ -37,7 +37,7 @@ export default function ServicesPage() {
   return (
     <PublicPageShell
       heroTitle="Services"
-      heroCopy="DriveMe provides simple chauffeur service in your own vehicle for personal, assisted, and business travel."
+      heroCopy="ChaufX provides simple chauffeur service in your own vehicle for personal, assisted, and business travel."
     >
       <section className="bg-white">
         <div className="mx-auto max-w-7xl px-5 py-12 md:px-8">

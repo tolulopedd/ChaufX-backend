@@ -15,6 +15,7 @@ driversRoutes.get(
     const driver = await prisma.driver.findUniqueOrThrow({
       where: { userId: request.auth!.userId },
       include: {
+        application: true,
         user: true,
         bookings: {
           orderBy: {

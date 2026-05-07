@@ -109,7 +109,7 @@ export function AdminShell({
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{description}</p>
               </div>
               <div className="rounded-2xl border border-[#DCDDFF] bg-[#EEF0FF] px-4 py-3 text-sm text-[#4338CA]">
-                Demo admin login: <span className="font-semibold">admin@driveme.com</span>
+                Demo admin login: <span className="font-semibold">admin@chaufx.com</span>
               </div>
             </div>
           </section>

@@ -4,7 +4,7 @@ const policies = [
   {
     id: "privacy-policy",
     title: "Privacy policy",
-    body: "DriveMe handles personal information through controlled access, secure processing, and limited operational use."
+    body: "ChaufX handles personal information through controlled access, secure processing, and limited operational use."
   },
   {
     id: "information-collection",
@@ -27,7 +27,7 @@ export default function PoliciesPage() {
   return (
     <PublicPageShell
       heroTitle="Policies"
-      heroCopy="DriveMe keeps public policy information simple, clear, and easy to review."
+      heroCopy="ChaufX keeps public policy information simple, clear, and easy to review."
     >
       <section className="bg-white">
         <div className="mx-auto max-w-7xl px-5 py-12 md:px-8">

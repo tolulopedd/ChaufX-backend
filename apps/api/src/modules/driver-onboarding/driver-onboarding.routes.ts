@@ -80,7 +80,7 @@ driverOnboardingRoutes.post(
           fullName: input.fullName,
           email: input.email,
           phone: input.phone,
-          passwordHash: await hashPassword(input.password ?? `DriveMe-${randomUUID()}`),
+          passwordHash: await hashPassword(input.password ?? `ChaufX-${randomUUID()}`),
           role: UserRole.DRIVER,
           status: AccountStatus.PENDING_APPROVAL,
           emailVerifiedAt: new Date()

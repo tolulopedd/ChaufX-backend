@@ -42,7 +42,7 @@ function StatusPageContent() {
     result?.status === "UNDER_REVIEW" && result?.reviewNote
       ? "Our team needs a few more details before we can continue with your application."
       : result?.status === "APPROVED"
-        ? "Your application has been approved. You can now continue with DriveMe driver access."
+        ? "Your application has been approved. You can now continue with ChaufX driver access."
         : result?.status === "REJECTED"
           ? "There is an important update on your application. Please review the note below."
           : "Your application is being reviewed by our team.";
@@ -53,7 +53,7 @@ function StatusPageContent() {
         <section className="rounded-[36px] border border-[#E5E7EB] bg-white p-8 shadow-[0_30px_90px_-55px_rgba(15,23,42,0.24)] md:p-10">
           <div className="flex items-center justify-between gap-4">
             <Link href="/" className="relative block h-14 w-[210px] max-w-[60vw]">
-              <Image src="/driver-status-logo.png" alt="DriveMe Canada" fill className="object-contain object-left" priority />
+              <Image src="/driver-status-logo.png" alt="ChaufX Canada" fill className="object-contain object-left" priority />
             </Link>
             <Link
               href="/"
@@ -130,7 +130,7 @@ export default function StatusPage() {
             <section className="rounded-[36px] border border-[#E5E7EB] bg-white p-8 shadow-[0_30px_90px_-55px_rgba(15,23,42,0.24)] md:p-10">
               <div className="flex items-center justify-between gap-4">
                 <Link href="/" className="relative block h-14 w-[210px] max-w-[60vw]">
-                  <Image src="/driver-status-logo.png" alt="DriveMe Canada" fill className="object-contain object-left" priority />
+                  <Image src="/driver-status-logo.png" alt="ChaufX Canada" fill className="object-contain object-left" priority />
                 </Link>
                 <Link
                   href="/"

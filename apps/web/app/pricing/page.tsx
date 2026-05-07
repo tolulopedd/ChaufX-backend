@@ -5,7 +5,7 @@ export default function PricingPage() {
   return (
     <PublicPageShell
       heroTitle="Pricing"
-      heroCopy="DriveMe pricing is designed to stay simple, inclusive, and billed in Canadian dollars."
+      heroCopy="ChaufX pricing is designed to stay simple, inclusive, and billed in Canadian dollars."
     >
       <section className="bg-white">
         <div className="mx-auto max-w-5xl px-5 py-12 md:px-8">

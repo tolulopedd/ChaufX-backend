@@ -1,185 +1,367 @@
-import { useEffect, useState } from "react";
-import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Animated,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View
+} from "react-native";
 import { StatusBar } from "expo-status-bar";
-import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import Mapbox from "@rnmapbox/maps";
 import * as Location from "expo-location";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { appConfig, toCurrency } from "@driveme/config";
-import { bookingStatusTone, brand, formatDateTime } from "@driveme/ui";
+import { formatDateTime } from "@chaufx/ui";
 import {
   cancelBooking,
   createBooking,
   fetchBookingEstimate,
   fetchBookings,
   fetchMapState,
-  fetchNotifications,
   fetchProfile,
   login,
-  submitRating
+  type Session
 } from "./src/lib/api";
 
-type Tab = "home" | "trips" | "notifications" | "profile";
-type BookingStep = "service" | "details" | "review";
+type Tab = "book" | "trips" | "account";
+type ScheduleMode = "now" | "later";
+type BookingRequestType = "NOW" | "LATER";
+type Coordinate = { latitude: number; longitude: number };
+type SearchField = "pickup" | "destination";
+type PlaceSuggestion = {
+  id: string;
+  label: string;
+  latitude: number;
+  longitude: number;
+};
 
-const bookingSteps: Array<{ key: BookingStep; label: string; caption: string }> = [
-  { key: "service", label: "1", caption: "Service" },
-  { key: "details", label: "2", caption: "Trip" },
-  { key: "review", label: "3", caption: "Review" }
-];
+const mapboxToken = process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? "";
+const logo = require("./assets/dm-logo-light.png");
 
-const tabs: Array<{ key: Tab; label: string }> = [
-  { key: "home", label: "Home" },
-  { key: "trips", label: "Trips" },
-  { key: "profile", label: "Account" }
-];
-
-const serviceOptions = [
-  {
-    key: "night-out",
-    label: "Night out",
-    title: "Drink & Dial",
-    description: "Keep your vehicle with you while a professional driver gets you home safely.",
-    notes: "Night out / Drink & Dial service requested."
-  },
-  {
-    key: "appointments",
-    label: "Appointments",
-    title: "Medical & therapy",
-    description: "Senior-friendly and assisted driving for medical visits, therapy sessions, and check-ins.",
-    notes: "Senior-friendly assisted service for appointments and support."
-  },
-  {
-    key: "events",
-    label: "Events",
-    title: "Events & family plans",
-    description: "A scheduled driver for dinners, weddings, sporting events, and evening commitments.",
-    notes: "Event service requested with scheduled arrival."
-  },
-  {
-    key: "shopping",
-    label: "Shopping",
-    title: "Errands & shopping days",
-    description: "Multiple stops in your own vehicle without the parking stress or back-and-forth logistics.",
-    notes: "Shopping and errand support with multiple planned stops."
-  },
-  {
-    key: "business",
-    label: "Business",
-    title: "Busy schedules",
-    description: "Reclaim your time on meeting days, school runs, and packed personal schedules.",
-    notes: "Business schedule support with time-sensitive arrival."
-  },
-  {
-    key: "long-distance",
-    label: "Distance",
-    title: "Long-distance driving",
-    description: "Professional coverage for longer drives, family visits, and inter-city travel in your own car.",
-    notes: "Long-distance personal driver service requested."
-  }
-] as const;
-
-const logoLight = require("./assets/dm-logo-light.png");
-const logoDark = require("./assets/dm-logo-dark.png");
-
-function getDefaultSchedule() {
+function getDefaultScheduledTime() {
   const date = new Date(Date.now() + 90 * 60 * 1000);
-
   return {
     date: date.toISOString().slice(0, 10),
     time: `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`
   };
 }
 
-function toScheduledIso(scheduledDate: string, scheduledTime: string) {
-  if (!scheduledDate || !scheduledTime) {
-    return "";
-  }
-
-  const composed = new Date(`${scheduledDate}T${scheduledTime}:00`);
-  return Number.isNaN(composed.getTime()) ? "" : composed.toISOString();
+function toIso(date: string, time: string) {
+  const parsed = new Date(`${date}T${time}:00`);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
-function formatBookingDateLabel(value: string) {
+function formatDateLabel(value: string) {
   const parsed = new Date(`${value}T12:00:00`);
   return Number.isNaN(parsed.getTime())
     ? "Select date"
-    : parsed.toLocaleDateString("en-CA", {
-        weekday: "short",
-        month: "short",
-        day: "numeric"
-      });
+    : parsed.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
 }
 
-function formatBookingTimeLabel(value: string) {
-  if (!value) {
-    return "Select time";
-  }
-
+function formatTimeLabel(value: string) {
   const parsed = new Date(`2026-01-01T${value}:00`);
   return Number.isNaN(parsed.getTime())
     ? "Select time"
-    : parsed.toLocaleTimeString("en-CA", {
-        hour: "numeric",
-        minute: "2-digit"
+    : parsed.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+}
+
+function clampDurationHours(value: number) {
+  return Math.max(2, Math.min(24, Math.floor(value)));
+}
+
+async function searchPlaces(query: string, currentLocation: Coordinate | null) {
+  if (!mapboxToken || query.trim().length < 3) {
+    return [] as PlaceSuggestion[];
+  }
+
+  const params = new URLSearchParams({
+    access_token: mapboxToken,
+    autocomplete: "true",
+    limit: "5",
+    language: "en",
+    country: "ca"
+  });
+
+  if (currentLocation) {
+    params.set("proximity", `${currentLocation.longitude},${currentLocation.latitude}`);
+  }
+
+  const response = await fetch(
+    `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query.trim())}.json?${params.toString()}`
+  );
+  const payload = await response.json();
+  const features = Array.isArray(payload?.features) ? payload.features : [];
+
+  return features
+    .filter((feature: any) => Array.isArray(feature.center) && feature.center.length >= 2)
+    .map((feature: any) => ({
+      id: String(feature.id),
+      label: String(feature.place_name ?? feature.text ?? query),
+      longitude: Number(feature.center[0]),
+      latitude: Number(feature.center[1])
+    }));
+}
+
+async function fetchRouteGeometry(start: Coordinate, end: Coordinate) {
+  if (!mapboxToken) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    access_token: mapboxToken,
+    geometries: "geojson",
+    overview: "full"
+  });
+
+  const response = await fetch(
+    `https://api.mapbox.com/directions/v5/mapbox/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?${params.toString()}`
+  );
+  const payload = await response.json();
+  const route = payload?.routes?.[0];
+
+  if (!route?.geometry?.coordinates?.length) {
+    return null;
+  }
+
+  return {
+    type: "Feature" as const,
+    geometry: {
+      type: "LineString" as const,
+      coordinates: route.geometry.coordinates as number[][]
+    },
+    properties: {}
+  };
+}
+
+function toneColor(status?: string) {
+  const normalized = String(status ?? "").toLowerCase();
+  if (["active", "completed"].includes(normalized)) return "#16A34A";
+  if (["accepted", "enroute"].includes(normalized)) return "#2563EB";
+  if (normalized === "pending") return "#D97706";
+  if (normalized === "cancelled") return "#DC2626";
+  return "#2563EB";
+}
+
+function Marker({ color, variant }: { color: string; variant: "current" | "pickup" | "destination" }) {
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (variant !== "pickup") {
+      return;
+    }
+
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 0.55,
+          duration: 700,
+          useNativeDriver: true
+        }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 700,
+          useNativeDriver: true
+        })
+      ])
+    );
+
+    animation.start();
+    return () => {
+      animation.stop();
+      pulse.setValue(1);
+    };
+  }, [pulse, variant]);
+
+  if (variant === "destination") {
+    return <View style={[styles.markerDiamond, { backgroundColor: color }]} />;
+  }
+
+  if (variant === "pickup") {
+    return (
+      <Animated.View
+        style={[
+          styles.markerPulse,
+          { backgroundColor: color, opacity: pulse, transform: [{ scale: pulse }] }
+        ]}
+      />
+    );
+  }
+
+  return <View style={[styles.markerCurrent, { backgroundColor: color }]} />;
+}
+
+function buildCameraProps(points: Coordinate[], fallback: Coordinate) {
+  if (points.length >= 2) {
+    const latitudes = points.map((point) => point.latitude);
+    const longitudes = points.map((point) => point.longitude);
+
+    return {
+      bounds: {
+        ne: [Math.max(...longitudes), Math.max(...latitudes)],
+        sw: [Math.min(...longitudes), Math.min(...latitudes)],
+        paddingTop: 88,
+        paddingRight: 48,
+        paddingBottom: 88,
+        paddingLeft: 48
+      },
+      animationMode: "easeTo" as const,
+      animationDuration: 600
+    };
+  }
+
+  return {
+    zoomLevel: 12.8,
+    centerCoordinate: [fallback.longitude, fallback.latitude] as [number, number],
+    animationMode: "easeTo" as const,
+    animationDuration: 600
+  };
+}
+
+function MapSurface({
+  currentLocation,
+  pickup,
+  destination
+}: {
+  currentLocation: Coordinate | null;
+  pickup: Coordinate | null;
+  destination: Coordinate | null;
+}) {
+  const center = pickup ?? currentLocation ?? { latitude: 49.8951, longitude: -97.1384 };
+  const cameraProps = buildCameraProps(
+    [currentLocation, pickup, destination].filter(Boolean) as Coordinate[],
+    center
+  );
+  const [routeShape, setRouteShape] = useState<any>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!pickup || !destination) {
+      setRouteShape(null);
+      return;
+    }
+
+    fetchRouteGeometry(pickup, destination)
+      .then((shape) => {
+        if (!cancelled) {
+          setRouteShape(shape);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRouteShape(null);
+        }
       });
-}
 
-function formatServiceLabel(serviceKey: string) {
-  return serviceOptions.find((option) => option.key === serviceKey)?.title ?? "Personal driver";
-}
+    return () => {
+      cancelled = true;
+    };
+  }, [pickup, destination]);
 
-function composeCustomerNotes(serviceKey: string, specialNotes: string) {
-  const serviceNotes = serviceOptions.find((option) => option.key === serviceKey)?.notes;
-  return [serviceNotes, specialNotes.trim()].filter(Boolean).join(" ");
-}
+  if (!mapboxToken) {
+    return (
+      <View style={styles.mapFallback}>
+        <Text style={styles.mapFallbackTitle}>Mapbox token needed</Text>
+        <Text style={styles.mapFallbackText}>
+          Add `EXPO_PUBLIC_MAPBOX_TOKEN` and run a custom Expo dev build to enable the live map.
+        </Text>
+      </View>
+    );
+  }
 
-function canCancelBooking(booking: any) {
-  const status = String(booking.status).toLowerCase();
-  return ["pending", "accepted"].includes(status);
+  return (
+    <Mapbox.MapView
+      style={styles.map}
+      styleURL="mapbox://styles/mapbox/navigation-night-v1"
+      compassEnabled={false}
+      logoEnabled={false}
+      attributionEnabled={false}
+      scrollEnabled={false}
+      zoomEnabled={false}
+      rotateEnabled={false}
+      pitchEnabled={false}
+    >
+      <Mapbox.Camera {...cameraProps} />
+      {currentLocation ? (
+        <Mapbox.PointAnnotation id="current-location" coordinate={[currentLocation.longitude, currentLocation.latitude]}>
+          <Marker color="#22C55E" variant="current" />
+        </Mapbox.PointAnnotation>
+      ) : null}
+      {pickup ? (
+        <Mapbox.PointAnnotation id="pickup" coordinate={[pickup.longitude, pickup.latitude]}>
+          <Marker color="#F97316" variant="pickup" />
+        </Mapbox.PointAnnotation>
+      ) : null}
+      {destination ? (
+        <Mapbox.PointAnnotation id="destination" coordinate={[destination.longitude, destination.latitude]}>
+          <Marker color="#2563EB" variant="destination" />
+        </Mapbox.PointAnnotation>
+      ) : null}
+      {routeShape ? (
+        <Mapbox.ShapeSource id="route" shape={routeShape}>
+          <Mapbox.LineLayer
+            id="route-line"
+            style={{ lineColor: "#60A5FA", lineWidth: 5, lineOpacity: 0.92, lineCap: "round", lineJoin: "round" }}
+          />
+        </Mapbox.ShapeSource>
+      ) : null}
+    </Mapbox.MapView>
+  );
 }
 
 export default function App() {
   const insets = useSafeAreaInsets();
-  const defaultSchedule = getDefaultSchedule();
-  const [tab, setTab] = useState<Tab>("home");
-  const [bookingStep, setBookingStep] = useState<BookingStep>("service");
-  const [session, setSession] = useState<any>(null);
-  const [bookings, setBookings] = useState<any[]>([]);
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const defaults = getDefaultScheduledTime();
+  const [session, setSession] = useState<Session | null>(null);
+  const [tab, setTab] = useState<Tab>("book");
+  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [status, setStatus] = useState("");
+  const [loginEmail, setLoginEmail] = useState("owner@chaufx.app");
+  const [loginPassword, setLoginPassword] = useState("OwnerPass123$");
   const [profile, setProfile] = useState<any>(null);
+  const [bookings, setBookings] = useState<any[]>([]);
   const [mapState, setMapState] = useState<any>(null);
   const [estimate, setEstimate] = useState<any>(null);
-  const [latestSubmission, setLatestSubmission] = useState<any>(null);
-  const [status, setStatus] = useState("");
-  const [loginEmail, setLoginEmail] = useState("owner@driveme.app");
-  const [loginPassword, setLoginPassword] = useState("OwnerPass123$");
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("now");
   const [locationPending, setLocationPending] = useState(false);
-  const [scheduleMode, setScheduleMode] = useState<"now" | "later">("now");
+  const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
+  const [activeSearchField, setActiveSearchField] = useState<SearchField | null>(null);
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
   const [form, setForm] = useState({
-    serviceKey: "night-out",
     pickupLocation: "201 Portage Ave, Winnipeg",
     pickupLat: "49.8959",
     pickupLng: "-97.1385",
     destinationLocation: "The Forks, Winnipeg",
     destinationLat: "49.8870",
     destinationLng: "-97.1318",
-    scheduledDate: defaultSchedule.date,
-    scheduledTime: defaultSchedule.time,
-    expectedDurationMinutes: "75",
-    specialNotes: "Need driver to wait during dinner stop",
+    scheduledDate: defaults.date,
+    scheduledTime: defaults.time,
+    durationHours: 2,
+    specialNotes: "",
     vehicleDetails: "Toyota Camry - midnight blue",
     zoneCode: "WPG-CENTRAL"
   });
-  const [ratingComment, setRatingComment] = useState("Smooth ride and great communication.");
+
+  useEffect(() => {
+    if (mapboxToken) {
+      Mapbox.setAccessToken(mapboxToken);
+    }
+  }, []);
 
   useEffect(() => {
     if (!session?.accessToken) {
       return;
     }
 
-    refresh();
+    refreshDashboard();
   }, [session]);
 
   useEffect(() => {
@@ -187,1861 +369,1216 @@ export default function App() {
       return;
     }
 
-    const scheduledStartAt = toScheduledIso(form.scheduledDate, form.scheduledTime);
-    if (!scheduledStartAt || !form.expectedDurationMinutes || Number(form.expectedDurationMinutes) < 15) {
-      setEstimate(null);
-      return;
-    }
+    primeCurrentLocation();
+  }, [session]);
 
-    fetchBookingEstimate(session.accessToken, {
-      scheduledStartAt,
-      expectedDurationMinutes: Number(form.expectedDurationMinutes),
-      zoneCode: form.zoneCode
-    })
-      .then(setEstimate)
-      .catch(() => {
-        setEstimate(null);
-      });
-  }, [form.expectedDurationMinutes, form.scheduledDate, form.scheduledTime, form.zoneCode, session]);
-
-  async function refresh() {
+  useEffect(() => {
     if (!session?.accessToken) {
       return;
     }
 
-    const [bookingList, notificationList, me] = await Promise.all([
-      fetchBookings(session.accessToken),
-      fetchNotifications(session.accessToken),
-      fetchProfile(session.accessToken)
-    ]);
+    const scheduledStartAt =
+      scheduleMode === "now" ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : toIso(form.scheduledDate, form.scheduledTime);
 
-    setBookings(bookingList);
-    setNotifications(notificationList);
-    setProfile(me);
+    fetchBookingEstimate(session.accessToken, {
+      scheduledStartAt,
+      expectedDurationMinutes: clampDurationHours(Number(form.durationHours) || 0) * 60,
+      zoneCode: form.zoneCode
+    })
+      .then(setEstimate)
+      .catch(() => setEstimate(null));
+  }, [form.durationHours, form.scheduledDate, form.scheduledTime, form.zoneCode, scheduleMode, session]);
 
-    const activeBooking = bookingList.find((booking) => ["accepted", "active", "enroute"].includes(String(booking.status).toLowerCase()));
-    if (activeBooking) {
-      const nextMapState = await fetchMapState(session.accessToken, activeBooking.id);
-      setMapState(nextMapState);
-    } else {
-      setMapState(null);
-    }
-  }
-
-  function handleLogout() {
-    setTab("home");
-    setBookingStep("service");
-    setSession(null);
-    setBookings([]);
-    setNotifications([]);
-    setProfile(null);
-    setMapState(null);
-    setEstimate(null);
-    setLatestSubmission(null);
-    setStatus("");
-  }
-
-  function handleDateChange(_event: DateTimePickerEvent, selectedDate?: Date) {
-    setShowDatePicker(false);
-    if (!selectedDate) {
+  useEffect(() => {
+    if (!activeSearchField) {
+      setSuggestions([]);
       return;
     }
 
-    setForm((current) => ({
-      ...current,
-      scheduledDate: selectedDate.toISOString().slice(0, 10)
-    }));
-  }
-
-  function handleTimeChange(_event: DateTimePickerEvent, selectedTime?: Date) {
-    setShowTimePicker(false);
-    if (!selectedTime) {
+    const query = activeSearchField === "pickup" ? form.pickupLocation : form.destinationLocation;
+    if (query.trim().length < 3) {
+      setSuggestions([]);
       return;
     }
 
-    setForm((current) => ({
-      ...current,
-      scheduledTime: `${String(selectedTime.getHours()).padStart(2, "0")}:${String(selectedTime.getMinutes()).padStart(2, "0")}`
-    }));
-  }
+    let cancelled = false;
+    setSearching(true);
 
-  async function useCurrentPickup() {
+    const timeout = setTimeout(() => {
+      searchPlaces(query, currentLocation)
+        .then((results) => {
+          if (!cancelled) {
+            setSuggestions(results);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setSuggestions([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setSearching(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [activeSearchField, currentLocation, form.destinationLocation, form.pickupLocation]);
+
+  const pickupCoordinate = useMemo<Coordinate | null>(() => {
+    const latitude = Number(form.pickupLat);
+    const longitude = Number(form.pickupLng);
+    return Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : null;
+  }, [form.pickupLat, form.pickupLng]);
+
+  const destinationCoordinate = useMemo<Coordinate | null>(() => {
+    const latitude = Number(form.destinationLat);
+    const longitude = Number(form.destinationLng);
+    return Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : null;
+  }, [form.destinationLat, form.destinationLng]);
+
+  const activeBooking = bookings.find((booking) =>
+    ["pending", "accepted", "enroute", "active"].includes(String(booking.status).toLowerCase())
+  );
+
+  async function refreshDashboard() {
+    if (!session?.accessToken) {
+      return;
+    }
+
+    setRefreshing(true);
     try {
-      setLocationPending(true);
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== "granted") {
-        setStatus("Location access is required to confirm pickup from your current position.");
+      const [bookingList, me] = await Promise.all([
+        fetchBookings(session.accessToken),
+        fetchProfile(session.accessToken)
+      ]);
+
+      setBookings(bookingList);
+      setProfile(me);
+
+      const trackableBooking = bookingList.find((booking) =>
+        ["accepted", "enroute", "active"].includes(String(booking.status).toLowerCase())
+      );
+      if (trackableBooking) {
+        setMapState(await fetchMapState(session.accessToken, trackableBooking.id));
+      } else {
+        setMapState(null);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to refresh your account.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function primeCurrentLocation() {
+    try {
+      const permission = await Location.getForegroundPermissionsAsync();
+      if (permission.status === "undetermined") {
+        const requested = await Location.requestForegroundPermissionsAsync();
+        if (requested.status !== "granted") {
+          return;
+        }
+      } else if (permission.status !== "granted") {
         return;
       }
 
       const current =
         (await Location.getLastKnownPositionAsync()) ??
-        (await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced
-        }));
+        (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
 
       if (!current) {
-        setStatus("We could not read your location yet. Try again in a few seconds.");
         return;
       }
 
-      setForm((existing) => ({
-        ...existing,
-        pickupLocation: "Current location",
-        pickupLat: String(current.coords.latitude),
-        pickupLng: String(current.coords.longitude)
-      }));
-      setStatus("Pickup updated to your current location.");
+      const coords = {
+        latitude: current.coords.latitude,
+        longitude: current.coords.longitude
+      };
+      setCurrentLocation(coords);
+    } catch {
+      // Keep the map usable even if device location isn't available yet.
+    }
+  }
+
+  async function handleLogin() {
+    setBusy(true);
+    try {
+      const nextSession = await login(loginEmail.trim(), loginPassword);
+      setSession(nextSession);
+      setStatus("");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Unable to use your current location.");
+      setStatus(error instanceof Error ? error.message : "Unable to sign in.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUseCurrentLocation() {
+    setLocationPending(true);
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== "granted") {
+        setStatus("Location access is needed to confirm your pickup point.");
+        return;
+      }
+
+      const current =
+        (await Location.getLastKnownPositionAsync()) ??
+        (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
+
+      if (!current) {
+        setStatus("We could not read your current position yet.");
+        return;
+      }
+
+      const coords = {
+        latitude: current.coords.latitude,
+        longitude: current.coords.longitude
+      };
+      setCurrentLocation(coords);
+
+      const reverse = await Location.reverseGeocodeAsync(coords);
+      const label = reverse[0]
+        ? [reverse[0].name, reverse[0].city].filter(Boolean).join(", ")
+        : `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}`;
+
+      setForm((currentForm) => ({
+        ...currentForm,
+        pickupLocation: label,
+        pickupLat: String(coords.latitude),
+        pickupLng: String(coords.longitude)
+      }));
+      setActiveSearchField(null);
+      setSuggestions([]);
+      setStatus("Pickup updated from your current location.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to get your current location.");
     } finally {
       setLocationPending(false);
     }
   }
 
+  function handleDateChange(_event: unknown, nextDate: Date) {
+    setForm((currentForm) => ({
+      ...currentForm,
+      scheduledDate: nextDate.toISOString().slice(0, 10)
+    }));
+  }
+
+  function handleTimeChange(_event: unknown, nextTime: Date) {
+    setForm((currentForm) => ({
+      ...currentForm,
+      scheduledTime: `${String(nextTime.getHours()).padStart(2, "0")}:${String(nextTime.getMinutes()).padStart(2, "0")}`
+    }));
+  }
+
+  async function submitBooking(nextMode: ScheduleMode) {
+    if (!session?.accessToken) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const pickupGeocode = await Location.geocodeAsync(form.pickupLocation.trim());
+      const destinationGeocode = await Location.geocodeAsync(form.destinationLocation.trim());
+
+      const pickupPoint =
+        pickupGeocode[0] ??
+        (currentLocation
+          ? {
+              latitude: currentLocation.latitude,
+              longitude: currentLocation.longitude
+            }
+          : null);
+
+      const destinationPoint = destinationGeocode[0] ?? null;
+
+      if (!pickupPoint) {
+        throw new Error("Please enter a pickup address we can locate or use your current location.");
+      }
+
+      if (!destinationPoint) {
+        throw new Error("Please enter a destination address we can locate.");
+      }
+
+      setForm((currentForm) => ({
+        ...currentForm,
+        pickupLat: String(pickupPoint.latitude),
+        pickupLng: String(pickupPoint.longitude),
+        destinationLat: String(destinationPoint.latitude),
+        destinationLng: String(destinationPoint.longitude)
+      }));
+
+      const scheduledStartAt =
+        nextMode === "now"
+          ? new Date(Date.now() + 15 * 60 * 1000).toISOString()
+          : toIso(form.scheduledDate, form.scheduledTime);
+
+      await createBooking(session.accessToken, {
+        requestType: (nextMode === "now" ? "NOW" : "LATER") satisfies BookingRequestType,
+        pickupLocation: form.pickupLocation,
+        pickupLat: pickupPoint.latitude,
+        pickupLng: pickupPoint.longitude,
+        destinationLocation: form.destinationLocation,
+        destinationLat: destinationPoint.latitude,
+        destinationLng: destinationPoint.longitude,
+        scheduledStartAt,
+        expectedDurationMinutes: clampDurationHours(Number(form.durationHours) || 0) * 60,
+        specialNotes: form.specialNotes.trim() || undefined,
+        vehicleDetails: form.vehicleDetails.trim() || undefined,
+        zoneCode: form.zoneCode
+      });
+
+      setStatus(nextMode === "now" ? "ChaufX request submitted." : "Scheduled drive submitted.");
+      setTab("trips");
+      await refreshDashboard();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to submit your booking.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancel(bookingId: string) {
+    if (!session?.accessToken) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await cancelBooking(session.accessToken, bookingId);
+      setStatus("Booking cancelled.");
+      await refreshDashboard();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to cancel this booking.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function logout() {
+    setSession(null);
+    setProfile(null);
+    setBookings([]);
+    setMapState(null);
+    setEstimate(null);
+    setTab("book");
+    setStatus("");
+  }
+
+  function applySuggestion(field: SearchField, suggestion: PlaceSuggestion) {
+    setForm((currentForm) =>
+      field === "pickup"
+        ? {
+            ...currentForm,
+            pickupLocation: suggestion.label,
+            pickupLat: String(suggestion.latitude),
+            pickupLng: String(suggestion.longitude)
+          }
+        : {
+            ...currentForm,
+            destinationLocation: suggestion.label,
+            destinationLat: String(suggestion.latitude),
+            destinationLng: String(suggestion.longitude)
+          }
+    );
+    setActiveSearchField(null);
+    setSuggestions([]);
+  }
+
   if (!session) {
     return (
-      <SafeAreaView style={styles.safeArea} edges={["left", "right", "bottom"]}>
-        <StatusBar style="dark" />
-        <ScrollView contentContainerStyle={[styles.authWrap, { paddingTop: Math.max(insets.top + 6, 24) }]}>
-          <View style={styles.authHero}>
-            <View style={styles.authHeroRow}>
-              <BrandLogo dark />
-              <View style={[styles.authHeroContent, styles.authHeroContentRight]}>
-                <View style={[styles.heroBadge, styles.heroBadgeRight]}>
-                  <Text style={styles.heroBadgeText}>Owner access</Text>
-                </View>
-                <Text
-                  style={[styles.authTitle, styles.authTitleCompact, styles.authTitleRight]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.82}
-                >
-                  App for customers.
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.authCard}>
-            <Text style={styles.cardEyebrow}>Secure sign in</Text>
-            <Text style={styles.authCardTitle}>Welcome back</Text>
-            <Text style={styles.cardSubtitle}>
-              Sign in to manage driver bookings, view trip activity, and keep your travel plans organized in one place.
+      <SafeAreaView style={styles.screen}>
+        <StatusBar style="light" />
+        <View style={[styles.loginWrap, { paddingTop: Math.max(insets.top, 18) + 20 }]}>
+          <View style={styles.loginPanel}>
+            <Image source={logo} style={styles.loginLogo} resizeMode="contain" />
+            <Text style={styles.loginEyebrow}>CHAUFX CANADA</Text>
+            <Text style={styles.loginTitle}>Book your driver in a few taps.</Text>
+            <Text style={styles.loginCopy}>
+              Rquest for driver, and choose whether you need the service now or later.
             </Text>
 
-            <View style={styles.authFieldGroup}>
-              <Text style={styles.authFieldLabel}>Email</Text>
+            <View style={styles.loginCard}>
               <TextInput
+                placeholder="owner@chaufx.app"
+                placeholderTextColor="#94A3B8"
+                autoCapitalize="none"
+                style={styles.input}
                 value={loginEmail}
                 onChangeText={setLoginEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                style={styles.authInput}
               />
+              <TextInput
+                placeholder="Password"
+                placeholderTextColor="#94A3B8"
+                secureTextEntry
+                style={styles.input}
+                value={loginPassword}
+                onChangeText={setLoginPassword}
+              />
+              <Pressable style={[styles.primaryButton, busy && styles.buttonDisabled]} disabled={busy} onPress={handleLogin}>
+                {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryButtonText}>Sign in</Text>}
+              </Pressable>
             </View>
 
-            <View style={styles.authFieldGroup}>
-              <View style={styles.authFieldHeader}>
-                <Text style={styles.authFieldLabel}>Password</Text>
-                <Text style={styles.authHelperText}>Forgot password</Text>
-              </View>
-              <TextInput value={loginPassword} onChangeText={setLoginPassword} secureTextEntry style={styles.authInput} />
-            </View>
-
-            <Pressable
-              style={styles.primaryButton}
-              onPress={async () => {
-                setStatus("Signing in...");
-                try {
-                  const nextSession = await login(loginEmail, loginPassword);
-                  setSession(nextSession);
-                  setStatus("");
-                } catch (error) {
-                  setStatus(error instanceof Error ? error.message : "Login failed");
-                }
-              }}
-            >
-              <Text style={styles.primaryButtonText}>Sign in</Text>
-            </Pressable>
-
-            <Pressable
-              style={styles.secondaryAction}
-              onPress={() => {
-                setLoginEmail("owner@driveme.app");
-                setLoginPassword("OwnerPass123$");
-                setStatus("Demo credentials loaded.");
-              }}
-            >
-              <Text style={styles.secondaryActionText}>Use demo account</Text>
-            </Pressable>
-
-            <View style={styles.demoBox}>
-              <Text style={styles.demoLabel}>Demo access</Text>
-              <Text style={styles.demoValue}>owner@driveme.app</Text>
-              <Text style={[styles.demoValue, styles.demoValueCompact]}>OwnerPass123$</Text>
-            </View>
-
-            {status ? <MessageBanner text={status} tone="warning" /> : null}
+            {status ? <Text style={styles.statusText}>{status}</Text> : null}
           </View>
-        </ScrollView>
+        </View>
       </SafeAreaView>
     );
   }
 
-  const activeBooking = bookings.find((booking) => ["accepted", "active", "enroute"].includes(String(booking.status).toLowerCase()));
-  const completedTrips = bookings.filter((booking) => String(booking.status).toLowerCase() === "completed");
-
   return (
-    <SafeAreaView style={styles.safeArea} edges={["left", "right", "bottom"]}>
-      <StatusBar style="dark" />
-      <ScrollView
-        style={styles.body}
-        contentContainerStyle={[styles.bodyContent, styles.bodyContentTop, { paddingTop: Math.max(insets.top + 6, 18) }]}
+    <SafeAreaView style={styles.screen}>
+      <StatusBar style="light" />
+      <KeyboardAvoidingView
+        style={styles.keyboardWrap}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
       >
-        {status ? <MessageBanner text={status} tone="neutral" /> : null}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={[styles.content, styles.contentGrow, { paddingTop: Math.max(insets.top, 10) + 12, paddingBottom: 52 }]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          automaticallyAdjustKeyboardInsets
+          contentInsetAdjustmentBehavior="automatic"
+          nestedScrollEnabled
+        >
+          <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.headerLabel}>Customer app</Text>
+            <Text style={styles.headerTitle}>Hello {profile?.fullName?.split(" ")[0] ?? "there"}</Text>
+          </View>
+          <Pressable style={styles.ghostButton} onPress={refreshDashboard}>
+            <Text style={styles.ghostButtonText}>{refreshing ? "Refreshing..." : "Refresh"}</Text>
+          </Pressable>
+        </View>
 
-        {tab === "home" ? (
-          <View style={styles.homeScreen}>
-            <View style={styles.sampleShell}>
-              <View style={styles.sampleBrand}>
-                <BrandLogo dark size={74} />
-                <Text style={styles.sampleBrandText}>DriveMe Canada</Text>
-              </View>
-              <SampleMapPreview />
+        <View style={styles.mapCard} pointerEvents="box-none">
+          <View style={styles.mapFrame} pointerEvents="none">
+            <MapSurface currentLocation={currentLocation} pickup={pickupCoordinate} destination={destinationCoordinate} />
+          </View>
+          <View style={styles.mapLegend}>
+            <View style={styles.mapLegendPill}>
+              <View style={[styles.legendPulse, { backgroundColor: "#F97316" }]} />
+              <Text style={styles.mapLegendText}>Pickup</Text>
+            </View>
+            <View style={styles.mapLegendPill}>
+              <View style={[styles.legendDiamond, { backgroundColor: "#2563EB" }]} />
+              <Text style={styles.mapLegendText}>Dropoff</Text>
+            </View>
+          </View>
+        </View>
 
-              <StepInputCard
-                step="1"
-                title="Confirm Pickup"
+        <View style={styles.tabRow}>
+          {[
+            ["book", "Book"],
+            ["trips", "Trips"],
+            ["account", "Account"]
+          ].map(([key, label]) => (
+            <Pressable key={key} style={[styles.tabButton, tab === key && styles.tabButtonActive]} onPress={() => setTab(key as Tab)}>
+              <Text style={[styles.tabButtonText, tab === key && styles.tabButtonTextActive]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {tab === "book" ? (
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>Confirm pickup</Text>
+            <Text style={styles.helperText}>Type any address below or use your current location.</Text>
+            <View style={styles.fieldStack}>
+              <TextInput
+                style={styles.input}
                 value={form.pickupLocation}
-                placeholder="Choose pickup point"
-                onChangeText={(value) => setForm((current) => ({ ...current, pickupLocation: value }))}
-                actionLabel={locationPending ? "Locating..." : "Use current"}
-                onActionPress={useCurrentPickup}
-                disabled={locationPending}
-              />
-
-              <StepInputCard
-                step="2"
-                title="Request Ride"
-                value={form.destinationLocation}
-                placeholder="Anywhere to anywhere"
-                onChangeText={(value) => setForm((current) => ({ ...current, destinationLocation: value }))}
-              />
-
-              <Pressable
-                style={styles.samplePrimaryButton}
-                onPress={async () => {
-                  const scheduledStartAt = new Date(Date.now() + appConfig.tripActivationMinutesBeforeStart * 60_000).toISOString();
-                  setScheduleMode("now");
-                  try {
-                    const result = await createBooking(session.accessToken, {
-                      pickupLocation: form.pickupLocation,
-                      pickupLat: Number(form.pickupLat),
-                      pickupLng: Number(form.pickupLng),
-                      destinationLocation: form.destinationLocation,
-                      destinationLat: Number(form.destinationLat),
-                      destinationLng: Number(form.destinationLng),
-                      scheduledStartAt,
-                      expectedDurationMinutes: Number(form.expectedDurationMinutes),
-                      specialNotes: composeCustomerNotes(form.serviceKey, form.specialNotes),
-                      vehicleDetails: form.vehicleDetails,
-                      zoneCode: form.zoneCode
-                    });
-                    setLatestSubmission(result.booking);
-                    setStatus("DriveMe now request sent.");
-                    setTab("trips");
-                    await refresh();
-                  } catch (error) {
-                    setStatus(error instanceof Error ? error.message : "Unable to request ride");
-                  }
+                onChangeText={(value) => {
+                  setForm((currentForm) => ({ ...currentForm, pickupLocation: value }));
+                  setActiveSearchField("pickup");
                 }}
-              >
-                <Text style={styles.samplePrimaryButtonText}>DRIVEME NOW</Text>
+                onFocus={() => setActiveSearchField("pickup")}
+                placeholder="Pickup address"
+                placeholderTextColor="#94A3B8"
+              />
+              {activeSearchField === "pickup" ? (
+                <View style={styles.suggestionPanel}>
+                  {searching ? <Text style={styles.suggestionHint}>Searching addresses...</Text> : null}
+                  {!searching && suggestions.length === 0 ? (
+                    <Text style={styles.suggestionHint}>Keep typing to see address suggestions.</Text>
+                  ) : null}
+                  {suggestions.map((suggestion) => (
+                    <Pressable
+                      key={suggestion.id}
+                      style={styles.suggestionRow}
+                      onPress={() => applySuggestion("pickup", suggestion)}
+                    >
+                    <Text style={styles.suggestionText}>{suggestion.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+              <Pressable style={styles.secondaryButton} onPress={handleUseCurrentLocation}>
+                <Text style={styles.secondaryButtonText}>{locationPending ? "Finding..." : "Use current location"}</Text>
               </Pressable>
+              <TextInput
+                style={styles.input}
+                value={form.destinationLocation}
+                onChangeText={(value) => {
+                  setForm((currentForm) => ({ ...currentForm, destinationLocation: value }));
+                  setActiveSearchField("destination");
+                }}
+                onFocus={() => setActiveSearchField("destination")}
+                placeholder="Destination address"
+                placeholderTextColor="#94A3B8"
+              />
+              {activeSearchField === "destination" ? (
+                <View style={styles.suggestionPanel}>
+                  {searching ? <Text style={styles.suggestionHint}>Searching addresses...</Text> : null}
+                  {!searching && suggestions.length === 0 ? (
+                    <Text style={styles.suggestionHint}>Keep typing to see address suggestions.</Text>
+                  ) : null}
+                  {suggestions.map((suggestion) => (
+                    <Pressable
+                      key={suggestion.id}
+                      style={styles.suggestionRow}
+                      onPress={() => applySuggestion("destination", suggestion)}
+                    >
+                      <Text style={styles.suggestionText}>{suggestion.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+              <TextInput
+                style={styles.input}
+                value={form.vehicleDetails}
+                onChangeText={(value) => setForm((currentForm) => ({ ...currentForm, vehicleDetails: value }))}
+                placeholder="Your vehicle"
+                placeholderTextColor="#94A3B8"
+              />
+              <TextInput
+                style={styles.input}
+                value={form.specialNotes}
+                onChangeText={(value) => setForm((currentForm) => ({ ...currentForm, specialNotes: value }))}
+                placeholder="Special notes (optional)"
+                placeholderTextColor="#94A3B8"
+              />
+            </View>
 
-              <Pressable style={styles.sampleSecondaryButton} onPress={() => setScheduleMode("later")}>
-                <Text style={styles.sampleSecondaryButtonText}>SCHEDULE A DRIVE</Text>
-              </Pressable>
+            <Text style={styles.panelTitle}>Request ride</Text>
+            <View style={styles.modeRow}>
+              {[
+                ["now", "ChaufX now"],
+                ["later", "Schedule later"]
+              ].map(([key, label]) => (
+                <Pressable
+                  key={key}
+                  style={[styles.modeButton, scheduleMode === key && styles.modeButtonActive]}
+                  onPress={() => setScheduleMode(key as ScheduleMode)}
+                >
+                  <Text style={[styles.modeButtonText, scheduleMode === key && styles.modeButtonTextActive]}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
 
+            <View style={styles.bookingDetailsCard}>
+              <Text style={styles.detailsBlockTitle}>Booking details</Text>
               {scheduleMode === "later" ? (
-                <View style={styles.scheduleSheet}>
-                  <View style={styles.row}>
-                    <PickerField label="Trip date" value={formatBookingDateLabel(form.scheduledDate)} onPress={() => setShowDatePicker(true)} />
-                    <PickerField label="Trip time" value={formatBookingTimeLabel(form.scheduledTime)} onPress={() => setShowTimePicker(true)} />
+                <View style={styles.scheduleCard}>
+                  <View style={styles.schedulePickerCard}>
+                    <View style={styles.scheduleButton}>
+                      <Text style={styles.scheduleLabel}>Date</Text>
+                      <Text style={styles.scheduleValue}>{formatDateLabel(form.scheduledDate)}</Text>
+                    </View>
+                    <View style={styles.inlinePickerWrap}>
+                      <DateTimePicker
+                        mode="date"
+                        display={Platform.OS === "ios" ? "compact" : "default"}
+                        value={new Date(`${form.scheduledDate}T12:00:00`)}
+                        onValueChange={handleDateChange}
+                      />
+                    </View>
                   </View>
-                  <Pressable
-                    style={styles.samplePrimaryButton}
-                    onPress={async () => {
-                      const scheduledStartAt = toScheduledIso(form.scheduledDate, form.scheduledTime);
-                      if (!scheduledStartAt) {
-                        setStatus("Choose a valid date and time.");
-                        return;
-                      }
-
-                      try {
-                        const result = await createBooking(session.accessToken, {
-                          pickupLocation: form.pickupLocation,
-                          pickupLat: Number(form.pickupLat),
-                          pickupLng: Number(form.pickupLng),
-                          destinationLocation: form.destinationLocation,
-                          destinationLat: Number(form.destinationLat),
-                          destinationLng: Number(form.destinationLng),
-                          scheduledStartAt,
-                          expectedDurationMinutes: Number(form.expectedDurationMinutes),
-                          specialNotes: composeCustomerNotes(form.serviceKey, form.specialNotes),
-                          vehicleDetails: form.vehicleDetails,
-                          zoneCode: form.zoneCode
-                        });
-                        setLatestSubmission(result.booking);
-                        setStatus("Scheduled drive request sent.");
-                        setTab("trips");
-                        await refresh();
-                      } catch (error) {
-                        setStatus(error instanceof Error ? error.message : "Unable to schedule drive");
-                      }
-                    }}
-                  >
-                    <Text style={styles.samplePrimaryButtonText}>CONFIRM SCHEDULE</Text>
-                  </Pressable>
+                  <View style={styles.schedulePickerCard}>
+                    <View style={styles.scheduleButton}>
+                      <Text style={styles.scheduleLabel}>Time</Text>
+                      <Text style={styles.scheduleValue}>{formatTimeLabel(form.scheduledTime)}</Text>
+                    </View>
+                    <View style={styles.inlinePickerWrap}>
+                      <DateTimePicker
+                        mode="time"
+                        display={Platform.OS === "ios" ? "compact" : "default"}
+                        value={new Date(`2026-01-01T${form.scheduledTime}:00`)}
+                        onValueChange={handleTimeChange}
+                      />
+                    </View>
+                  </View>
                 </View>
               ) : null}
 
-              {activeBooking ? (
-                <Pressable style={[styles.homeShortcut, styles.homeShortcutShell]} onPress={() => setTab("trips")}>
-                  <Text style={styles.homeShortcutLabel}>CURRENT TRIP</Text>
-                  <Text style={[styles.homeShortcutValue, styles.homeShortcutValueShell]}>
-                    {activeBooking.assignedDriver?.user?.fullName ? `Driver: ${activeBooking.assignedDriver.user.fullName}` : "View trip status"}
-                  </Text>
-                </Pressable>
-              ) : null}
-
-              <View style={[styles.homeNavRow, styles.homeFooter]}>
-                <Pressable style={[styles.homeNavButton, styles.homeNavButtonShell]} onPress={() => setTab("trips")}>
-                  <Text style={[styles.homeNavButtonText, styles.homeNavButtonTextShell]}>Trips</Text>
-                </Pressable>
-                <Pressable style={[styles.homeNavButton, styles.homeNavButtonShell]} onPress={() => setTab("profile")}>
-                  <Text style={[styles.homeNavButtonText, styles.homeNavButtonTextShell]}>Account</Text>
-                </Pressable>
+              <View style={styles.hoursRow}>
+                <View style={styles.hoursStepper}>
+                  <Pressable
+                    style={styles.hoursStepperButton}
+                    onPress={() =>
+                      setForm((currentForm) => ({
+                        ...currentForm,
+                        durationHours: clampDurationHours(currentForm.durationHours - 1)
+                      }))
+                    }
+                  >
+                    <Text style={styles.hoursStepperButtonText}>−</Text>
+                  </Pressable>
+                  <View style={styles.hoursStepperValueWrap}>
+                    <Text style={styles.hoursStepperValue}>{form.durationHours}</Text>
+                    <Text style={styles.hoursStepperUnit}>hours</Text>
+                  </View>
+                  <Pressable
+                    style={styles.hoursStepperButton}
+                    onPress={() =>
+                      setForm((currentForm) => ({
+                        ...currentForm,
+                        durationHours: clampDurationHours(currentForm.durationHours + 1)
+                      }))
+                    }
+                  >
+                    <Text style={styles.hoursStepperButtonText}>+</Text>
+                  </Pressable>
+                </View>
               </View>
+
+              <View style={styles.estimateRow}>
+                <View>
+                  <Text style={styles.estimateLabel}>Estimated fare</Text>
+                  <Text style={styles.estimateValue}>
+                    {estimate?.fareEstimate ? `$${Number(estimate.fareEstimate).toFixed(2)}` : "Pending"}
+                  </Text>
+                </View>
+                <Text style={styles.estimateMeta}>
+                  {estimate?.billableHours
+                    ? `${estimate.billableHours} billable hour${estimate.billableHours === 1 ? "" : "s"} at $${estimate.flatFeePerHour}/hour`
+                    : scheduleMode === "now"
+                      ? "Maps unlock shortly before the trip window."
+                      : "Trip tracking opens inside the approved window."}
+                </Text>
+              </View>
+              {scheduleMode === "now" ? (
+                <Text style={styles.detailsFooterNote}>Pickup window starts about 15 minutes from now.</Text>
+              ) : null}
             </View>
-          </View>
-        ) : null}
 
-        {tab !== "home" ? (
-          <View style={styles.tabRow}>
-            {tabs.filter((item) => item.key !== "home").map((item) => {
-              const active = tab === item.key;
-
-              return (
-                <Pressable key={item.key} style={[styles.tabChip, active ? styles.tabChipActive : null]} onPress={() => setTab(item.key)}>
-                  <Text style={[styles.tabChipText, active ? styles.tabChipTextActive : null]}>{item.label}</Text>
-                </Pressable>
-              );
-            })}
-            <Pressable style={styles.tabChip} onPress={() => setTab("home")}>
-              <Text style={styles.tabChipText}>Back home</Text>
+            <Pressable style={[styles.primaryButton, busy && styles.buttonDisabled]} disabled={busy} onPress={() => submitBooking(scheduleMode)}>
+              <Text style={styles.primaryButtonText}>{scheduleMode === "now" ? "ChaufX now" : "Schedule a drive"}</Text>
             </Pressable>
           </View>
         ) : null}
 
         {tab === "trips" ? (
-          <Card eyebrow="Bookings" title="Trip history and live status" subtitle="Track pending, accepted, active, completed, and cancelled requests in one timeline.">
-            {bookings.length ? (
-              bookings.map((booking) => (
-                <TripItem
-                  key={booking.id}
-                  booking={booking}
-                  onCancel={
-                    canCancelBooking(booking)
-                      ? async () => {
-                          try {
-                            setStatus("Cancelling booking...");
-                            await cancelBooking(session.accessToken, booking.id);
-                            setStatus("Booking cancelled.");
-                            await refresh();
-                          } catch (error) {
-                            setStatus(error instanceof Error ? error.message : "Unable to cancel booking");
-                          }
-                        }
-                      : undefined
-                  }
-                />
-              ))
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>Trips</Text>
+            {activeBooking ? (
+              <View style={styles.bookingCard}>
+                <View style={styles.bookingHeader}>
+                  <View style={styles.bookingTagRow}>
+                    <Text style={[styles.bookingStatus, { color: toneColor(activeBooking.status) }]}>{String(activeBooking.status).toUpperCase()}</Text>
+                    <Text style={styles.requestTypeChip}>{activeBooking.requestType === "NOW" ? "ChaufX now" : "Schedule later"}</Text>
+                  </View>
+                  {["pending", "accepted"].includes(String(activeBooking.status).toLowerCase()) ? (
+                    <Pressable onPress={() => handleCancel(activeBooking.id)}>
+                      <Text style={styles.linkText}>Cancel</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                <Text style={styles.bookingTitle}>{activeBooking.pickupLocation}</Text>
+                <Text style={styles.bookingCopy}>{activeBooking.destinationLocation}</Text>
+                <Text style={styles.bookingMeta}>{formatDateTime(activeBooking.scheduledStartAt)}</Text>
+                {mapState ? (
+                  <View style={styles.infoStrip}>
+                    <Text style={styles.infoStripText}>
+                      {mapState.active ? "Tracking is active for this trip." : "Tracking is locked until the approved trip window opens."}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             ) : (
-              <EmptyState title="No bookings yet" body="Once you submit a request, your trip timeline will appear here." />
+              <Text style={styles.emptyText}>No active booking yet.</Text>
             )}
 
-            {completedTrips.slice(0, 1).map((booking) => (
-              <View key={`${booking.id}-rating`} style={styles.ratingBox}>
-                <Text style={styles.innerCardEyebrow}>Post-trip review</Text>
-                <Text style={styles.ratingTitle}>Rate your completed trip</Text>
-                <Field label="Review" value={ratingComment} onChangeText={setRatingComment} multiline />
-                <Pressable
-                  style={styles.secondaryButton}
-                  onPress={async () => {
-                    try {
-                      await submitRating(session.accessToken, booking.id, 5, ratingComment);
-                      setStatus("Rating submitted.");
-                    } catch (error) {
-                      setStatus(error instanceof Error ? error.message : "Unable to submit rating");
-                    }
-                  }}
-                >
-                  <Text style={styles.secondaryButtonText}>Send 5-star review</Text>
-                </Pressable>
+            {bookings.filter((booking) => booking.id !== activeBooking?.id).map((booking) => (
+              <View key={booking.id} style={styles.bookingCard}>
+                <View style={styles.bookingTagRow}>
+                  <Text style={[styles.bookingStatus, { color: toneColor(booking.status) }]}>{String(booking.status).toUpperCase()}</Text>
+                  <Text style={styles.requestTypeChip}>{booking.requestType === "NOW" ? "ChaufX now" : "Schedule later"}</Text>
+                </View>
+                <Text style={styles.bookingTitle}>{booking.pickupLocation}</Text>
+                <Text style={styles.bookingCopy}>{booking.destinationLocation}</Text>
+                <Text style={styles.bookingMeta}>{formatDateTime(booking.scheduledStartAt)}</Text>
               </View>
             ))}
-          </Card>
+          </View>
         ) : null}
 
-        {tab === "profile" ? (
-          <Card eyebrow="Account" title="Owner profile" subtitle="Manage your saved identity, vehicle details, and common pickup information.">
-            <View style={styles.profileCard}>
-              <Text style={styles.profileName}>{profile?.fullName ?? session.user.fullName}</Text>
-              <Text style={styles.profileMeta}>{profile?.email ?? session.user.email}</Text>
+        {tab === "account" ? (
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>Account</Text>
+            <View style={styles.accountRow}>
+              <Text style={styles.accountLabel}>Name</Text>
+              <Text style={styles.accountValue}>{profile?.fullName ?? session.user.fullName}</Text>
             </View>
-            <View style={styles.profileGrid}>
-              <InfoTile label="Vehicles" value={String(profile?.customerProfile?.vehicles?.length ?? 0)} />
-              <InfoTile label="Saved addresses" value={String(profile?.customerProfile?.savedAddresses?.length ?? 0)} />
+            <View style={styles.accountRow}>
+              <Text style={styles.accountLabel}>Email</Text>
+              <Text style={styles.accountValue}>{profile?.email ?? session.user.email}</Text>
             </View>
-            <View style={styles.inlineInfo}>
-              <Text style={styles.inlineInfoLabel}>Saved locations</Text>
-              <Text style={styles.inlineInfoValue}>{profile?.customerProfile?.savedAddresses?.join(", ") ?? "No saved addresses yet."}</Text>
-            </View>
-            <View style={styles.actionRow}>
-              <Pressable style={styles.secondaryButton} onPress={refresh}>
-                <Text style={styles.secondaryButtonText}>Refresh app</Text>
-              </Pressable>
-              <Pressable style={[styles.destructiveButton, styles.primaryButtonSplit]} onPress={handleLogout}>
-                <Text style={styles.destructiveButtonText}>Log out</Text>
-              </Pressable>
-            </View>
-          </Card>
+            <Pressable style={styles.secondaryButton} onPress={logout}>
+              <Text style={styles.secondaryButtonText}>Log out</Text>
+            </Pressable>
+          </View>
         ) : null}
 
-        {showDatePicker ? (
-          <DateTimePicker
-            value={new Date(`${form.scheduledDate}T12:00:00`)}
-            mode="date"
-            display="default"
-            minimumDate={new Date()}
-            onChange={handleDateChange}
-          />
-        ) : null}
-
-        {showTimePicker ? (
-          <DateTimePicker
-            value={new Date(`2026-01-01T${form.scheduledTime}:00`)}
-            mode="time"
-            display="default"
-            onChange={handleTimeChange}
-          />
-        ) : null}
-      </ScrollView>
+          {status ? <Text style={styles.statusText}>{status}</Text> : null}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function BrandLogo({ dark = false, size = 94 }: { dark?: boolean; size?: number }) {
-  return (
-    <Image
-      source={dark ? logoDark : logoLight}
-      style={[styles.logo, { width: size, height: size }, dark ? styles.logoDark : styles.logoLight]}
-      resizeMode="contain"
-    />
-  );
-}
-
-function Card({
-  eyebrow,
-  title,
-  subtitle,
-  tone = "light",
-  children
-}: {
-  eyebrow: string;
-  title: string;
-  subtitle: string;
-  tone?: "light" | "dark" | "indigo";
-  children: React.ReactNode;
-}) {
-  const dark = tone === "dark" || tone === "indigo";
-  const indigo = tone === "indigo";
-
-  return (
-    <View style={[styles.card, dark ? styles.cardDark : null, indigo ? styles.cardIndigo : null]}>
-      <Text style={[styles.cardEyebrow, dark ? styles.cardEyebrowDark : null]}>{eyebrow}</Text>
-      <Text style={[styles.sectionTitle, dark ? styles.sectionTitleDark : null]}>{title}</Text>
-      <Text style={[styles.cardSubtitle, dark ? styles.cardSubtitleDark : null]}>{subtitle}</Text>
-      <View style={styles.cardBody}>{children}</View>
-    </View>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChangeText,
-  multiline = false,
-  compact = false
-}: {
-  label: string;
-  value: string;
-  onChangeText: (value: string) => void;
-  multiline?: boolean;
-  compact?: boolean;
-}) {
-  return (
-    <View style={[styles.fieldWrap, compact ? styles.fieldWrapCompact : null]}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        multiline={multiline}
-        style={[styles.input, multiline ? styles.inputMultiline : null]}
-      />
-    </View>
-  );
-}
-
-function PickerField({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
-  return (
-    <View style={styles.fieldWrapCompact}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <Pressable style={styles.pickerField} onPress={onPress}>
-        <Text style={styles.pickerFieldValue}>{value}</Text>
-      </Pressable>
-    </View>
-  );
-}
-
-function Metric({ value, label, inverse = false }: { value: string; label: string; inverse?: boolean }) {
-  return (
-    <View style={[styles.metricCard, inverse ? styles.metricCardInverse : null]}>
-      <Text style={[styles.metricValue, inverse ? styles.metricValueInverse : null]}>{value}</Text>
-      <Text style={[styles.metricLabel, inverse ? styles.metricLabelInverse : null]}>{label}</Text>
-    </View>
-  );
-}
-
-function AuthStat({ value, label }: { value: string; label: string }) {
-  return (
-    <View style={styles.authStat}>
-      <Text style={styles.authStatValue}>{value}</Text>
-      <Text style={styles.authStatLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function StepInputCard({
-  step,
-  title,
-  value,
-  placeholder,
-  onChangeText,
-  actionLabel,
-  onActionPress,
-  disabled = false
-}: {
-  step: string;
-  title: string;
-  value: string;
-  placeholder: string;
-  onChangeText: (value: string) => void;
-  actionLabel?: string;
-  onActionPress?: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <View style={styles.stepInputCard}>
-      <View style={styles.stepInputIcon}>
-        <Text style={styles.stepInputIconText}>{step}</Text>
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.stepInputTitle}>{title}</Text>
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          placeholderTextColor="rgba(226,232,240,0.42)"
-          style={styles.stepInputField}
-        />
-      </View>
-      {actionLabel && onActionPress ? (
-        <Pressable style={styles.stepInputAction} onPress={onActionPress} disabled={disabled}>
-          <Text style={styles.stepInputActionText}>{actionLabel}</Text>
-        </Pressable>
-      ) : (
-        <View style={styles.stepInputPin} />
-      )}
-    </View>
-  );
-}
-
-function SampleMapPreview() {
-  return (
-    <View style={styles.sampleMap}>
-      <View style={styles.sampleMapGrid} />
-      <View style={styles.sampleMapMarker} />
-      <View style={styles.sampleMapBadge}>
-        <Text style={styles.sampleMapBadgeText}>Route</Text>
-      </View>
-    </View>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const tone = bookingStatusTone(status.toLowerCase() as any);
-  return (
-    <View style={[styles.statusBadge, { backgroundColor: `${tone.color}26` }]}>
-      <Text style={[styles.statusBadgeText, { color: tone.color }]}>{tone.text}</Text>
-    </View>
-  );
-}
-
-function TripItem({ booking, onCancel }: { booking: any; onCancel?: () => Promise<void> | void }) {
-  const tone = bookingStatusTone(String(booking.status).toLowerCase() as any);
-  const notes = String(booking.specialNotes ?? "").trim();
-
-  return (
-    <View style={styles.tripCard}>
-      <View style={styles.tripCardTopRow}>
-        <View style={styles.tripCardContent}>
-          <Text style={styles.tripTitle}>
-            {booking.pickupLocation} to {booking.destinationLocation}
-          </Text>
-          <Text style={styles.tripMeta}>{formatDateTime(booking.scheduledStartAt)}</Text>
-          {booking.assignedDriver ? <Text style={styles.tripMeta}>Driver: {booking.assignedDriver.user.fullName}</Text> : null}
-          {booking.vehicleDetails ? <Text style={styles.tripMeta}>Vehicle: {booking.vehicleDetails}</Text> : null}
-          {notes ? <Text style={styles.tripMeta}>{notes}</Text> : null}
-        </View>
-        <View style={[styles.badge, { backgroundColor: `${tone.color}1A` }]}>
-          <Text style={[styles.badgeText, { color: tone.color }]}>{tone.text}</Text>
-        </View>
-      </View>
-
-      {onCancel ? (
-        <Pressable style={styles.tripAction} onPress={onCancel}>
-          <Text style={styles.tripActionText}>Cancel before trip start</Text>
-        </Pressable>
-      ) : null}
-    </View>
-  );
-}
-
-function MessageBanner({ text, tone }: { text: string; tone: "neutral" | "warning" }) {
-  return (
-    <View style={[styles.messageBanner, tone === "warning" ? styles.messageBannerWarning : null]}>
-      <Text style={[styles.messageBannerText, tone === "warning" ? styles.messageBannerTextWarning : null]}>{text}</Text>
-    </View>
-  );
-}
-
-function EmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <View style={styles.emptyState}>
-      <Text style={styles.emptyTitle}>{title}</Text>
-      <Text style={styles.bodyText}>{body}</Text>
-    </View>
-  );
-}
-
-function InfoTile({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.infoTile}>
-      <Text style={styles.infoTileLabel}>{label}</Text>
-      <Text style={styles.infoTileValue}>{value}</Text>
-    </View>
-  );
-}
-
-function MiniMap({ state }: { state: any }) {
-  return (
-    <View style={styles.mapBox}>
-      <View style={styles.mapRow}>
-        <View style={styles.mapDotStart} />
-        <View style={styles.mapRoute} />
-        <View style={styles.mapDotEnd} />
-      </View>
-      <Text style={styles.mapText}>
-        {state.active ? "Driver live location is visible during the current trip window." : "Tracking remains disabled outside the scheduled window."}
-      </Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  safeArea: {
+  screen: {
     flex: 1,
-    backgroundColor: "#f4f6fb"
+    backgroundColor: "#081930"
   },
-  authWrap: {
-    flexGrow: 1,
-    justifyContent: "center",
-    paddingHorizontal: 18,
-    paddingTop: 32,
-    paddingBottom: 32,
+  keyboardWrap: {
+    flex: 1
+  },
+  scroll: {
+    flex: 1
+  },
+  content: {
+    paddingHorizontal: 20,
+    gap: 16
+  },
+  contentGrow: {
+    flexGrow: 1
+  },
+  loginWrap: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    justifyContent: "center"
+  },
+  loginPanel: {
+    borderRadius: 28,
+    backgroundColor: "#0F172A",
+    padding: 24,
     gap: 14
   },
-  authHero: {
-    borderRadius: 34,
-    backgroundColor: brand.ink,
-    padding: 20,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.16,
-    shadowOffset: { width: 0, height: 18 },
-    shadowRadius: 28,
-    gap: 10
+  loginLogo: {
+    width: 112,
+    height: 112,
+    alignSelf: "center"
   },
-  authHeroRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14
-  },
-  authHeroContent: {
-    flex: 1,
-    gap: 8
-  },
-  authHeroContentRight: {
-    alignItems: "flex-end"
-  },
-  heroBadge: {
-    alignSelf: "flex-start",
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 12,
-    paddingVertical: 8
-  },
-  heroBadgeRight: {
-    alignSelf: "flex-end"
-  },
-  heroBadgeText: {
-    color: "#E5E7EB",
+  loginEyebrow: {
+    color: "#60A5FA",
     fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase"
-  },
-  authTitle: {
-    fontSize: 24,
-    lineHeight: 28,
-    fontWeight: "700",
-    color: "#FFFFFF"
-  },
-  authTitleCompact: {
-    fontSize: 20,
-    lineHeight: 24
-  },
-  authTitleRight: {
-    textAlign: "right"
-  },
-  authText: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: "rgba(229,231,235,0.84)"
-  },
-  authMetricRow: {
-    flexDirection: "row",
-    gap: 8
-  },
-  authCard: {
-    borderRadius: 30,
-    padding: 20,
-    backgroundColor: "#FFFFFF",
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 16 },
-    shadowRadius: 24,
-    gap: 12
-  },
-  authFieldGroup: {
-    gap: 8
-  },
-  authFieldHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center"
-  },
-  authFieldLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#334155"
-  },
-  authHelperText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: brand.accent
-  },
-  authInput: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    color: brand.ink
-  },
-  cardEyebrow: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.8,
-    textTransform: "uppercase",
-    color: brand.accent
-  },
-  cardEyebrowDark: {
-    color: "#C7D2FE"
-  },
-  authCardTitle: {
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: "700",
-    color: brand.ink
-  },
-  cardSubtitle: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: "#5B677B"
-  },
-  cardSubtitleDark: {
-    color: "rgba(229,231,235,0.78)"
-  },
-  demoBox: {
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    padding: 14
-  },
-  demoLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: "#64748B"
-  },
-  demoLabelSpacing: {
-    marginTop: 14
-  },
-  demoValue: {
-    marginTop: 5,
-    fontSize: 15,
-    fontWeight: "600",
-    color: brand.ink
-  },
-  demoValueCompact: {
-    marginTop: 3,
-    fontSize: 13
-  },
-  secondaryAction: {
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#DCDDFF",
-    backgroundColor: "#EEF0FF",
-    paddingVertical: 13
-  },
-  secondaryActionText: {
-    color: brand.accentDeep,
-    fontSize: 14,
+    letterSpacing: 2.4,
+    textAlign: "center",
     fontWeight: "700"
   },
-  authStat: {
-    flex: 1,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 12,
-    paddingVertical: 10
-  },
-  authStatValue: {
-    fontSize: 17,
+  loginTitle: {
+    color: "#FFFFFF",
+    fontSize: 21,
     fontWeight: "700",
-    color: "#FFFFFF"
+    textAlign: "center"
   },
-  authStatLabel: {
-    marginTop: 2,
-    fontSize: 11,
-    color: "rgba(229,231,235,0.78)"
+  loginCopy: {
+    color: "#CBD5E1",
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: "center"
   },
-  headerShell: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    gap: 10
+  loginCard: {
+    borderRadius: 24,
+    backgroundColor: "#F8FAFC",
+    padding: 16,
+    gap: 12
   },
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center"
   },
-  logo: {
-    width: 94,
-    height: 94,
-    borderRadius: 24
+  headerLabel: {
+    color: "#60A5FA",
+    fontSize: 12,
+    letterSpacing: 1.8,
+    textTransform: "uppercase",
+    fontWeight: "700"
   },
-  logoLight: {
-    backgroundColor: "#FFFFFF"
+  headerTitle: {
+    color: "#FFFFFF",
+    fontSize: 28,
+    fontWeight: "700",
+    marginTop: 4
   },
-  logoDark: {
+  ghostButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.35)",
+    paddingHorizontal: 14,
+    paddingVertical: 9
+  },
+  ghostButtonText: {
+    color: "#E2E8F0",
+    fontWeight: "600"
+  },
+  mapCard: {
+    height: 332,
+    position: "relative"
+  },
+  mapFrame: {
+    flex: 1,
+    overflow: "hidden",
+    borderRadius: 30,
+    borderWidth: 1,
+    borderColor: "rgba(96,165,250,0.18)",
     backgroundColor: "#0F172A"
   },
-  screenHero: {
-    borderRadius: 30,
-    backgroundColor: "#FFFFFF",
-    padding: 18,
-    gap: 12,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 12 },
-    shadowRadius: 20
-  },
-  topBrandBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 4,
-    gap: 12
-  },
-  topBrandInner: {
-    alignItems: "center",
-    gap: 6,
+  map: {
     flex: 1
   },
-  topBrandLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 2.2,
-    textTransform: "uppercase",
-    color: "#64748B"
-  },
-  screenHeroTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  mapFallback: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
-    gap: 10
+    paddingHorizontal: 24,
+    backgroundColor: "#0F172A"
   },
-  screenGreeting: {
-    fontSize: 28,
-    lineHeight: 32,
-    fontWeight: "700",
-    color: brand.ink
+  mapFallbackTitle: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "700"
   },
-  screenSummary: {
+  mapFallbackText: {
+    color: "#CBD5E1",
     fontSize: 14,
     lineHeight: 21,
-    color: "#5B677B"
+    textAlign: "center",
+    marginTop: 10
   },
-  nextActionButton: {
-    borderRadius: 24,
-    backgroundColor: "#0F172A",
-    padding: 16,
-    gap: 6
+  markerCurrent: {
+    width: 16,
+    height: 16,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    shadowColor: "#081930",
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4
   },
-  nextActionEyebrow: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.6,
-    textTransform: "uppercase",
-    color: "#93C5FD"
-  },
-  nextActionTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#FFFFFF"
-  },
-  nextActionText: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: "rgba(229,231,235,0.82)"
-  },
-  sampleShell: {
-    borderRadius: 34,
-    backgroundColor: "#070B15",
-    padding: 20,
-    gap: 12,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.22,
-    shadowOffset: { width: 0, height: 20 },
-    shadowRadius: 28
-  },
-  sampleBrand: {
-    alignItems: "center",
-    gap: 4
-  },
-  sampleBrandText: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 2.2,
-    textTransform: "uppercase",
-    color: "rgba(229,231,235,0.74)"
-  },
-  sampleMap: {
-    height: 224,
-    borderRadius: 24,
-    backgroundColor: "#EAF0F7",
-    overflow: "hidden",
-    justifyContent: "center",
-    alignItems: "center"
-  },
-  sampleMapGrid: {
-    position: "absolute",
-    inset: 0,
-    borderRadius: 24,
-    backgroundColor: "#EAF0F7"
-  },
-  sampleMapMarker: {
+  markerPulse: {
     width: 18,
     height: 18,
     borderRadius: 999,
-    backgroundColor: "#14B8A6",
-    borderWidth: 4,
-    borderColor: "rgba(20,184,166,0.18)"
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    shadowColor: "#081930",
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4
   },
-  sampleMapBadge: {
-    position: "absolute",
-    top: 18,
-    right: 18,
-    borderRadius: 999,
-    backgroundColor: "#0F172A",
-    paddingHorizontal: 12,
-    paddingVertical: 6
-  },
-  sampleMapBadgeText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "700"
-  },
-  stepInputCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderRadius: 22,
-    backgroundColor: "#101826",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.06)",
-    paddingHorizontal: 15,
-    paddingVertical: 13
-  },
-  stepInputIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 999,
-    backgroundColor: "rgba(59,130,246,0.18)",
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  stepInputIconText: {
-    color: "#93C5FD",
-    fontSize: 13,
-    fontWeight: "700"
-  },
-  stepInputTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#FFFFFF"
-  },
-  stepInputField: {
-    marginTop: 2,
-    color: "#E2E8F0",
-    fontSize: 12,
-    paddingVertical: 0
-  },
-  stepInputAction: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(20,184,166,0.24)",
-    backgroundColor: "rgba(20,184,166,0.12)",
-    paddingHorizontal: 10,
-    paddingVertical: 8
-  },
-  stepInputActionText: {
-    color: "#5EEAD4",
-    fontSize: 11,
-    fontWeight: "700"
-  },
-  stepInputPin: {
-    width: 14,
-    height: 14,
-    borderRadius: 999,
-    backgroundColor: "#14B8A6"
-  },
-  samplePrimaryButton: {
-    borderRadius: 18,
-    backgroundColor: "#2563EB",
-    alignItems: "center",
-    paddingVertical: 16
-  },
-  samplePrimaryButtonText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "800",
-    letterSpacing: 0.8
-  },
-  sampleSecondaryButton: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    alignItems: "center",
-    paddingVertical: 15
-  },
-  sampleSecondaryButtonText: {
-    color: "#E2E8F0",
-    fontSize: 14,
-    fontWeight: "800",
-    letterSpacing: 0.8
-  },
-  scheduleSheet: {
-    borderRadius: 22,
-    backgroundColor: "#101826",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.06)",
-    padding: 12,
-    gap: 10
-  },
-  sampleEstimateText: {
-    color: "#93C5FD",
-    fontSize: 13,
-    textAlign: "center"
-  },
-  homeScreen: {
-    gap: 0
-  },
-  homeFooter: {
-    marginTop: 4,
-    gap: 8
-  },
-  homeShortcut: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#D8E0EF",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 3
-  },
-  homeShortcutLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    textTransform: "uppercase",
-    color: brand.accent
-  },
-  homeShortcutValue: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: brand.ink
-  },
-  homeShortcutShell: {
-    borderColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "#101826"
-  },
-  homeShortcutValueShell: {
-    color: "#E2E8F0"
-  },
-  homeNavRow: {
-    flexDirection: "row",
-    gap: 8
-  },
-  homeNavButton: {
-    flex: 1,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#D8E0EF",
-    backgroundColor: "#FFFFFF",
-    paddingVertical: 10,
-    alignItems: "center"
-  },
-  homeNavButtonText: {
-    color: brand.ink,
-    fontSize: 12,
-    fontWeight: "700"
-  },
-  homeNavButtonShell: {
-    borderColor: "rgba(255,255,255,0.1)",
-    backgroundColor: "transparent"
-  },
-  homeNavButtonTextShell: {
-    color: "#E2E8F0"
-  },
-  tabRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8
-  },
-  tabChip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "#D8E0EF",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 14,
-    paddingVertical: 10
-  },
-  tabChipActive: {
-    borderColor: "#C7D2FE",
-    backgroundColor: "#EEF2FF"
-  },
-  tabChipText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#475569"
-  },
-  tabChipTextActive: {
-    color: brand.accentDeep
-  },
-  menuButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#D7DBE6",
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4
-  },
-  menuLine: {
+  markerDiamond: {
     width: 18,
-    height: 2,
-    borderRadius: 999,
-    backgroundColor: brand.ink
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    transform: [{ rotate: "45deg" }],
+    shadowColor: "#081930",
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4
   },
-  menuPanel: {
-    borderRadius: 24,
-    backgroundColor: "#FFFFFF",
-    padding: 12,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 14 },
-    shadowRadius: 20,
+  mapLegend: {
+    position: "absolute",
+    top: 14,
+    right: 14,
     gap: 8
   },
-  menuItem: {
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 13
-  },
-  menuItemActive: {
-    backgroundColor: "#EEF0FF"
-  },
-  menuItemText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#475569"
-  },
-  menuItemTextActive: {
-    color: brand.accentDeep
-  },
-  menuRefresh: {
-    marginTop: 4,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#DCDDFF",
-    backgroundColor: "#EEF0FF",
-    paddingVertical: 12,
-    alignItems: "center"
-  },
-  menuRefreshText: {
-    color: brand.accentDeep,
-    fontSize: 14,
-    fontWeight: "700"
-  },
-  heroCard: {
-    borderRadius: 32,
-    backgroundColor: brand.ink,
-    padding: 16,
-    gap: 8
-  },
-  heroTopRow: {
+  mapLegendPill: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    gap: 10
-  },
-  surfaceBadge: {
+    gap: 8,
+    alignSelf: "flex-start",
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(15,23,42,0.82)",
     paddingHorizontal: 12,
-    paddingVertical: 7
-  },
-  surfaceBadgeText: {
-    color: "#E5E7EB",
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase"
-  },
-  heroTitle: {
-    fontSize: 23,
-    lineHeight: 29,
-    fontWeight: "500",
-    color: "#FFFFFF"
-  },
-  heroTitleAccent: {
-    fontWeight: "700",
-    color: "#FFFFFF"
-  },
-  heroText: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: "rgba(229,231,235,0.82)"
-  },
-  metricRow: {
-    flexDirection: "row",
-    gap: 8
-  },
-  metricCard: {
-    flex: 1,
-    borderRadius: 22,
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 12,
-    paddingVertical: 10
-  },
-  metricCardInverse: {
-    backgroundColor: "rgba(255,255,255,0.08)",
+    paddingVertical: 7,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.12)"
   },
-  metricValue: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: brand.ink
+  mapLegendText: {
+    color: "#E2E8F0",
+    fontSize: 11,
+    fontWeight: "700"
   },
-  metricValueInverse: {
+  legendPulse: {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: "#FFFFFF"
+  },
+  legendDiamond: {
+    width: 12,
+    height: 12,
+    borderRadius: 3,
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    transform: [{ rotate: "45deg" }]
+  },
+  tabRow: {
+    flexDirection: "row",
+    gap: 10
+  },
+  tabButton: {
+    flex: 1,
+    borderRadius: 18,
+    backgroundColor: "#111C30",
+    paddingVertical: 12,
+    alignItems: "center"
+  },
+  tabButtonActive: {
+    backgroundColor: "#2563EB"
+  },
+  tabButtonText: {
+    color: "#CBD5E1",
+    fontWeight: "600"
+  },
+  tabButtonTextActive: {
     color: "#FFFFFF"
   },
-  metricLabel: {
-    marginTop: 3,
-    fontSize: 11,
-    color: "#64748B"
+  panel: {
+    borderRadius: 28,
+    backgroundColor: "#F8FAFC",
+    padding: 18,
+    gap: 14
   },
-  metricLabelInverse: {
-    color: "rgba(229,231,235,0.78)"
+  panelTitle: {
+    color: "#0F172A",
+    fontSize: 18,
+    fontWeight: "700"
   },
-  statusBadge: {
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7
+  detailsBlockTitle: {
+    color: "#0F172A",
+    fontSize: 16,
+    fontWeight: "700"
   },
-  statusBadgeText: {
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 1.2
+  helperText: {
+    color: "#64748B",
+    fontSize: 14,
+    lineHeight: 20
   },
-  body: {
-    flex: 1
-  },
-  bodyContent: {
-    flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 32,
+  fieldStack: {
     gap: 12
   },
-  bodyContentTop: {
-    paddingTop: 12
+  suggestionPanel: {
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#D9E1EC",
+    overflow: "hidden"
   },
-  messageBanner: {
-    borderRadius: 20,
-    backgroundColor: "#EEF0FF",
+  suggestionRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2F7"
+  },
+  suggestionText: {
+    color: "#0F172A",
+    fontSize: 14,
+    lineHeight: 20
+  },
+  suggestionHint: {
+    color: "#64748B",
+    fontSize: 13,
+    lineHeight: 19,
     paddingHorizontal: 16,
     paddingVertical: 14
   },
-  messageBannerWarning: {
-    backgroundColor: "#FFF7ED"
-  },
-  messageBannerText: {
-    color: "#4338CA",
-    fontSize: 13,
-    lineHeight: 20,
-    fontWeight: "600"
-  },
-  messageBannerTextWarning: {
-    color: "#B45309"
-  },
-  card: {
-    borderRadius: 30,
-    backgroundColor: "#FFFFFF",
-    padding: 20,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 18 },
-    shadowRadius: 28
-  },
-  cardDark: {
-    backgroundColor: "#101A33"
-  },
-  cardIndigo: {
-    backgroundColor: "#4338CA"
-  },
-  sectionTitle: {
-    marginTop: 6,
-    fontSize: 25,
-    lineHeight: 30,
-    fontWeight: "700",
-    color: brand.ink
-  },
-  sectionTitleDark: {
-    color: "#FFFFFF"
-  },
-  cardBody: {
-    marginTop: 18,
-    gap: 14
-  },
-  stepRow: {
-    flexDirection: "row",
-    gap: 8
-  },
-  stepItem: {
-    flex: 1,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    paddingHorizontal: 10,
-    paddingVertical: 12,
-    alignItems: "center"
-  },
-  stepItemActive: {
-    borderColor: "#C7D2FE",
-    backgroundColor: "#EEF0FF"
-  },
-  stepValue: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#64748B"
-  },
-  stepValueActive: {
-    color: brand.accentDeep
-  },
-  stepLabel: {
-    marginTop: 3,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.1,
-    textTransform: "uppercase",
-    color: "#94A3B8"
-  },
-  stepLabelActive: {
-    color: brand.accentDeep
-  },
-  bodyText: {
-    fontSize: 14,
-    lineHeight: 22,
-    color: "#5B677B"
-  },
-  darkBodyText: {
-    fontSize: 14,
-    lineHeight: 22,
-    color: "rgba(229,231,235,0.82)"
-  },
-  darkValueText: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#FFFFFF"
-  },
-  darkInfoCard: {
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "rgba(255,255,255,0.04)",
-    padding: 14
-  },
-  darkInfoLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: "rgba(229,231,235,0.62)"
-  },
-  darkInfoValue: {
-    marginTop: 6,
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#FFFFFF"
-  },
-  row: {
-    flexDirection: "row",
-    gap: 12
-  },
-  actionRow: {
-    flexDirection: "row",
-    gap: 10
-  },
-  fieldWrap: {
-    gap: 8
-  },
-  fieldWrapCompact: {
-    flex: 1
-  },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 0.2,
-    color: "#334155"
-  },
   input: {
-    borderRadius: 20,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    color: brand.ink
-  },
-  pickerField: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    paddingHorizontal: 14,
-    paddingVertical: 13
-  },
-  pickerFieldValue: {
-    color: brand.ink,
-    fontSize: 15
-  },
-  inputMultiline: {
-    minHeight: 100,
-    textAlignVertical: "top"
-  },
-  inlineInfo: {
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    padding: 16,
-    gap: 6
-  },
-  inlineInfoLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: "#64748B"
-  },
-  inlineInfoValue: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: brand.ink
-  },
-  inlineInfoCaption: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: "#64748B"
-  },
-  primaryButton: {
-    borderRadius: 22,
-    backgroundColor: brand.accent,
-    paddingHorizontal: 18,
-    paddingVertical: 15,
-    alignItems: "center"
-  },
-  primaryButtonSplit: {
-    flex: 1
-  },
-  primaryButtonText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700"
+    borderColor: "#D9E1EC",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    color: "#0F172A",
+    fontSize: 16
   },
   secondaryButton: {
-    borderRadius: 20,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#DCDDFF",
-    backgroundColor: "#EEF0FF",
-    paddingHorizontal: 16,
-    paddingVertical: 13,
+    borderColor: "#C7D2FE",
+    backgroundColor: "#EEF2FF",
+    paddingVertical: 14,
     alignItems: "center"
   },
   secondaryButtonText: {
-    color: brand.accentDeep,
-    fontSize: 14,
+    color: "#4338CA",
     fontWeight: "700"
   },
-  destructiveButton: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#FBCFE8",
-    backgroundColor: "#FFF1F2",
-    paddingHorizontal: 16,
+  primaryButton: {
+    borderRadius: 18,
+    backgroundColor: "#2563EB",
+    paddingVertical: 16,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  primaryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700"
+  },
+  buttonDisabled: {
+    opacity: 0.6
+  },
+  modeRow: {
+    flexDirection: "row",
+    gap: 10
+  },
+  modeButton: {
+    flex: 1,
+    borderRadius: 16,
+    backgroundColor: "#E2E8F0",
     paddingVertical: 13,
     alignItems: "center"
   },
-  destructiveButtonText: {
-    color: "#BE123C",
-    fontSize: 14,
+  modeButtonActive: {
+    backgroundColor: "#0F172A"
+  },
+  modeButtonText: {
+    color: "#334155",
     fontWeight: "700"
   },
-  selectionGrid: {
-    gap: 10
+  modeButtonTextActive: {
+    color: "#FFFFFF"
   },
-  selectionCard: {
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#FAFBFD",
-    padding: 16,
-    gap: 6
-  },
-  selectionCardActive: {
-    borderColor: "#C7D2FE",
-    backgroundColor: "#EEF0FF"
-  },
-  selectionEyebrow: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: "#64748B"
-  },
-  selectionEyebrowActive: {
-    color: brand.accentDeep
-  },
-  selectionTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: brand.ink
-  },
-  selectionTitleActive: {
-    color: brand.accentDeep
-  },
-  selectionBody: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: "#64748B"
-  },
-  selectionBodyActive: {
-    color: "#4C5A77"
-  },
-  summaryCard: {
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    padding: 16,
-    gap: 6
-  },
-  summaryLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: "#64748B"
-  },
-  summaryValue: {
-    fontSize: 16,
-    lineHeight: 23,
-    fontWeight: "700",
-    color: brand.ink
-  },
-  summaryMeta: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: "#64748B"
-  },
-  confirmationBox: {
-    gap: 8
-  },
-  confirmationTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: brand.ink
-  },
-  confirmationMetrics: {
-    flexDirection: "row",
-    gap: 10
-  },
-  menuLogout: {
-    marginTop: 2,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#F2C3CF",
-    backgroundColor: "#FFF5F7",
-    paddingVertical: 12,
-    alignItems: "center"
-  },
-  menuLogoutText: {
-    color: "#BE123C",
-    fontSize: 14,
-    fontWeight: "700"
-  },
-  tripCard: {
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#FAFBFD",
-    padding: 16,
+  bookingDetailsCard: {
+    borderRadius: 22,
+    backgroundColor: "#EEF4FF",
+    padding: 14,
     gap: 12
   },
-  tripCardTopRow: {
+  scheduleCard: {
     flexDirection: "row",
-    gap: 12,
-    alignItems: "flex-start"
+    gap: 10,
+    alignItems: "stretch"
   },
-  tripCardContent: {
+  hoursCard: {
+    gap: 10
+  },
+  hoursRow: {
+    alignItems: "center"
+  },
+  hoursStepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flex: 1,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#D9E1EC",
+    padding: 8
+  },
+  hoursStepperButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#EEF2FF",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  hoursStepperButtonText: {
+    color: "#4338CA",
+    fontSize: 24,
+    fontWeight: "700",
+    lineHeight: 28
+  },
+  hoursStepperValueWrap: {
+    alignItems: "center",
+    justifyContent: "center",
     flex: 1
   },
-  tripTitle: {
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: "700",
-    color: brand.ink
+  hoursStepperValue: {
+    color: "#0F172A",
+    fontSize: 28,
+    fontWeight: "800"
   },
-  tripMeta: {
-    marginTop: 4,
+  hoursStepperUnit: {
+    color: "#64748B",
     fontSize: 13,
-    color: "#64748B"
+    fontWeight: "600",
+    marginTop: 2
   },
-  badge: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 7
+  schedulePickerCard: {
+    flex: 1,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#D9E1EC",
+    overflow: "hidden"
   },
-  badgeText: {
-    fontSize: 11,
-    fontWeight: "700",
+  scheduleButton: {
+    padding: 14
+  },
+  inlinePickerWrap: {
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+    alignItems: "center"
+  },
+  scheduleLabel: {
+    color: "#64748B",
+    fontSize: 12,
+    fontWeight: "600",
     textTransform: "uppercase",
     letterSpacing: 1.2
   },
-  tripAction: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#F3D0D8",
-    backgroundColor: "#FFF5F7",
-    paddingVertical: 12,
-    alignItems: "center"
+  scheduleValue: {
+    color: "#0F172A",
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 6
   },
-  tripActionText: {
-    color: "#BE123C",
-    fontSize: 13,
+  estimateRow: {
+    borderRadius: 20,
+    backgroundColor: "#E0F2FE",
+    padding: 16,
+    gap: 6
+  },
+  estimateLabel: {
+    color: "#0369A1",
+    fontSize: 12,
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
     fontWeight: "700"
   },
-  ratingBox: {
-    marginTop: 6,
-    gap: 10,
-    borderRadius: 24,
-    backgroundColor: "#F8FAFC",
-    padding: 16
+  estimateValue: {
+    color: "#0F172A",
+    fontSize: 24,
+    fontWeight: "800"
   },
-  innerCardEyebrow: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: brand.accent
+  estimateMeta: {
+    color: "#334155",
+    fontSize: 13,
+    lineHeight: 20
   },
-  ratingTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: brand.ink
+  detailsFooterNote: {
+    color: "#64748B",
+    fontSize: 13,
+    lineHeight: 19
   },
-  notificationItem: {
+  bookingCard: {
     borderRadius: 22,
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#FAFBFD",
+    borderColor: "#E2E8F0",
     padding: 16,
     gap: 6
   },
-  notificationTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: brand.ink
-  },
-  profileCard: {
-    borderRadius: 24,
-    backgroundColor: brand.ink,
-    padding: 18
-  },
-  profileName: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#FFFFFF"
-  },
-  profileMeta: {
-    marginTop: 6,
-    fontSize: 14,
-    color: "rgba(229,231,235,0.78)"
-  },
-  profileGrid: {
+  bookingHeader: {
     flexDirection: "row",
-    gap: 12
+    justifyContent: "space-between",
+    alignItems: "center"
   },
-  infoTile: {
-    flex: 1,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    padding: 16
-  },
-  infoTileLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: "#64748B"
-  },
-  infoTileValue: {
-    marginTop: 6,
-    fontSize: 24,
-    fontWeight: "700",
-    color: brand.ink
-  },
-  emptyState: {
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#F8FAFC",
-    padding: 18,
-    gap: 6
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: brand.ink
-  },
-  mapBox: {
-    borderRadius: 24,
-    backgroundColor: "#0F172A",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 16,
-    gap: 12
-  },
-  mapRow: {
+  bookingTagRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10
+    gap: 8,
+    flexWrap: "wrap"
   },
-  mapRoute: {
-    flex: 1,
-    height: 6,
-    borderRadius: 99,
-    backgroundColor: brand.accent
+  bookingStatus: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.3
   },
-  mapDotStart: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: brand.accent
+  requestTypeChip: {
+    borderRadius: 999,
+    backgroundColor: "#E0E7FF",
+    color: "#4338CA",
+    fontSize: 11,
+    fontWeight: "700",
+    overflow: "hidden",
+    paddingHorizontal: 10,
+    paddingVertical: 5
   },
-  mapDotEnd: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: "#10B981"
+  linkText: {
+    color: "#2563EB",
+    fontWeight: "700"
   },
-  mapText: {
+  bookingTitle: {
+    color: "#0F172A",
+    fontSize: 18,
+    fontWeight: "700"
+  },
+  bookingCopy: {
+    color: "#475569",
+    fontSize: 15
+  },
+  bookingMeta: {
+    color: "#64748B",
+    fontSize: 13
+  },
+  infoStrip: {
+    marginTop: 8,
+    borderRadius: 16,
+    backgroundColor: "#0F172A",
+    padding: 14
+  },
+  infoStripText: {
+    color: "#E2E8F0",
     fontSize: 13,
-    lineHeight: 20,
-    color: "rgba(229,231,235,0.82)"
+    lineHeight: 19
   },
+  emptyText: {
+    color: "#64748B",
+    fontSize: 15
+  },
+  accountRow: {
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 16
+  },
+  accountLabel: {
+    color: "#64748B",
+    fontSize: 12,
+    letterSpacing: 1.1,
+    textTransform: "uppercase",
+    fontWeight: "700"
+  },
+  accountValue: {
+    color: "#0F172A",
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 6
+  },
+  statusText: {
+    color: "#CBD5E1",
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: "center"
+  }
 });

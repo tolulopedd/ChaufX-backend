@@ -240,7 +240,7 @@ export default function ReportsPage() {
     printWindow.document.write(`
       <html>
         <head>
-          <title>${selectedReportLabel} - DriveMe Reports</title>
+          <title>${selectedReportLabel} - ChaufX Reports</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 32px; color: #0f172a; }
             h1 { margin: 0 0 8px; font-size: 28px; }
@@ -249,7 +249,7 @@ export default function ReportsPage() {
         </head>
         <body>
           <h1>${selectedReportLabel}</h1>
-          <p>DriveMe admin report export${filterSummary ? ` | ${filterSummary}` : ""}</p>
+          <p>ChaufX admin report export${filterSummary ? ` | ${filterSummary}` : ""}</p>
           ${rowsMarkup || "<p>No records match the selected filters.</p>"}
         </body>
       </html>

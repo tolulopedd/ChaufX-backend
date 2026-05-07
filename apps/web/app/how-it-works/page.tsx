@@ -8,7 +8,7 @@ const customerSteps = [
 
 const driverSteps = [
   "Submit your application and upload your onboarding details.",
-  "Wait for review and approval from the DriveMe admin team.",
+  "Wait for review and approval from the ChaufX admin team.",
   "Use your login to access the driver web and mobile experience."
 ];
 
@@ -16,7 +16,7 @@ export default function HowItWorksPage() {
   return (
     <PublicPageShell
       heroTitle="How It Works"
-      heroCopy="DriveMe keeps the booking journey simple for customers and the onboarding journey clear for chauffeurs."
+      heroCopy="ChaufX keeps the booking journey simple for customers and the onboarding journey clear for chauffeurs."
     >
       <section className="bg-white">
         <div className="mx-auto max-w-7xl px-5 py-12 md:px-8">

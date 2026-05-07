@@ -1,10 +1,10 @@
 @import "tailwindcss";
-@import "@driveme/design-tokens/web.css";
+@import "../../../packages/design-tokens/src/web.css";
 
 :root {
   color-scheme: light;
   font-family: "Avenir Next", Inter, "Segoe UI", sans-serif;
-  background: var(--driveme-surface-muted);
+  background: var(--chaufx-surface-muted);
   --admin-navy: #0f172a;
   --admin-violet: #4f46e5;
   --admin-violet-deep: #4338ca;

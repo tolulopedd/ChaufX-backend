@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@driveme/ui", "@driveme/design-tokens"]
+  transpilePackages: ["@chaufx/ui", "@chaufx/design-tokens"]
 };
 
 export default nextConfig;

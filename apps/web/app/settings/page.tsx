@@ -66,7 +66,7 @@ export default function SettingsPage() {
   return (
     <AdminShell
       title="Settings"
-      description="Provinces/territories, pricing controls, and operational defaults for the DriveMe platform."
+      description="Provinces/territories, pricing controls, and operational defaults for the ChaufX platform."
     >
       <div className="grid gap-4 xl:grid-cols-3">
         <StatCard title="Provinces/Territories" value={provincePricing.length} detail="Coverage and pricing rows available across Canada." />

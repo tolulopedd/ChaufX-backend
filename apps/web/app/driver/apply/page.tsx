@@ -50,12 +50,12 @@ export default function DriverApplyIntroPage() {
     </div>
           <div className="grid gap-6 lg:grid-cols-[0.48fr_0.52fr]">
             <div className="rounded-[30px] border border-[#E5E7EB] bg-[#F8FAFC] p-7 shadow-[0_24px_70px_-50px_rgba(15,23,42,0.18)]">
-              <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">DriveMe network</div>
+              <div className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#4338CA]">ChaufX network</div>
               <h2 className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-[#0F172A]">
                 A growing pool of certified drivers across Canada.
               </h2>
               <p className="mt-4 text-sm leading-7 text-slate-600">
-                DriveMe is building a large network of certified chauffeurs across Canada that customers can access anytime for personal driving needs.
+                ChaufX is building a large network of certified chauffeurs across Canada that customers can access anytime for personal driving needs.
               </p>
               <p className="mt-3 text-sm leading-7 text-slate-600">
                 This role involves driving our customers&apos; own vehicles while delivering professional service, strong communication, and a dependable customer experience.

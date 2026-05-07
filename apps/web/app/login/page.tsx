@@ -107,7 +107,7 @@ function LoginPageContent() {
       }
 
       if (result.user.role === "customer") {
-        setSuccess("Customer account recognized. Continue in the DriveMe mobile app for bookings and trip updates.");
+        setSuccess("Customer account recognized. Continue in the ChaufX mobile app for bookings and trip updates.");
         return;
       }
 
@@ -266,7 +266,7 @@ function LoginPageContent() {
                   <div className="rounded-[28px] border border-[#E5E7EB] bg-[#F8FAFC] p-6">
                     <div className="text-sm font-semibold text-slate-950">Driver onboarding</div>
                     <p className="mt-2 text-sm leading-6 text-slate-600">
-                      Drivers complete the onboarding form first. Once approved, access is provided through the DriveMe Driver App.
+                      Drivers complete the onboarding form first. Once approved, access is provided through the ChaufX Driver App.
                     </p>
                   </div>
 

@@ -11,16 +11,16 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
-      "@driveme/config": [
+      "@chaufx/config": [
         "packages/config/src"
       ],
-      "@driveme/types": [
+      "@chaufx/types": [
         "packages/types/src"
       ],
-      "@driveme/ui": [
+      "@chaufx/ui": [
         "packages/ui/src"
       ],
-      "@driveme/design-tokens": [
+      "@chaufx/design-tokens": [
         "packages/design-tokens/src"
       ]
     }

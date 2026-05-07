@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
-const TOKEN_KEY = "driveme_admin_token";
-const DRIVER_TOKEN_KEY = "driveme_driver_web_token";
+const TOKEN_KEY = "chaufx_admin_token";
+const DRIVER_TOKEN_KEY = "chaufx_driver_web_token";
 
 export function getStoredToken() {
   if (typeof window === "undefined") {

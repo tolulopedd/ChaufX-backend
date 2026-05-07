@@ -1,20 +1,33 @@
 {
   "expo": {
-    "name": "DriveMe Driver",
-    "slug": "driveme-driver",
+    "name": "ChaufX Driver",
+    "slug": "chaufx-driver",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "plugins": [
+      "@rnmapbox/maps",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "ChaufX uses your location while you are online to route nearby requests and support active trip tracking."
+        }
+      ]
+    ],
     "ios": {
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "DriveMe uses your location while you are online so we can route the nearest customer requests to you."
-      }
+        "NSLocationWhenInUseUsageDescription": "ChaufX uses your location while you are online so we can route the nearest customer requests to you."
+      },
+      "bundleIdentifier": "com.anonymous.chaufxdriver"
     },
     "android": {
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
-      ]
+        "ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.anonymous.chaufxdriver"
     },
     "assetBundlePatterns": [
       "**/*"

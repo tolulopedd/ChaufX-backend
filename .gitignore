@@ -1,5 +1,6 @@
 node_modules
 .DS_Store
+.idea
 .env
 .env.local
 *.log
@@ -7,8 +8,18 @@ coverage
 dist
 build
 .next
+.expo
 expo-env.d.ts
 *.tsbuildinfo
 apps/api/prisma/dev.db
 apps/api/prisma/dev.db-journal
 apps/api/storage/
+apps/*/android/.gradle/
+apps/*/android/build/
+apps/*/android/app/build/
+apps/*/android/app/.cxx/
+apps/*/android/app/debug.keystore
+apps/*/android/local.properties
+apps/*/ios/Pods/
+apps/*/ios/build/
+apps/*/ios/.xcode.env.local

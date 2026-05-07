@@ -272,7 +272,7 @@ function DriverApplicationFormPageContent() {
   return (
     <PublicPageShell
       heroTitle="Driver application form"
-      heroCopy="Complete the detailed DriveMe driver application form. Your finished submission is routed directly to the admin review module."
+      heroCopy="Complete the detailed ChaufX driver application form. Your finished submission is routed directly to the admin review module."
     >
       <section className="bg-white">
         <div className="mx-auto max-w-6xl px-5 py-12 md:px-8">
@@ -782,7 +782,7 @@ function DriverApplicationFormPageContent() {
 
               <div className="flex items-center justify-between border-t border-[#EEF0F4] pt-4">
                 <p className="text-sm text-slate-500">
-                  Your completed application will be submitted to DriveMe & other partners for evaluation and approval.
+                  Your completed application will be submitted to ChaufX & other partners for evaluation and approval.
                 </p>
                 <button
                   type="submit"
@@ -806,7 +806,7 @@ export default function DriverApplicationFormPage() {
       fallback={
         <PublicPageShell
           heroTitle="Driver application form"
-          heroCopy="Complete the detailed DriveMe driver application form. Your finished submission is routed directly to the admin review module."
+          heroCopy="Complete the detailed ChaufX driver application form. Your finished submission is routed directly to the admin review module."
         >
           <section className="bg-white">
             <div className="mx-auto max-w-6xl px-5 py-12 md:px-8">

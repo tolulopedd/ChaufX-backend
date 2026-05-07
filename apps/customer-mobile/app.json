@@ -1,20 +1,33 @@
 {
   "expo": {
-    "name": "DriveMe Customer",
-    "slug": "driveme-customer",
+    "name": "ChaufX Customer",
+    "slug": "chaufx-customer",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "plugins": [
+      "@rnmapbox/maps",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "ChaufX uses your location to confirm your pickup point and show your trip on the map."
+        }
+      ]
+    ],
     "ios": {
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "DriveMe uses your location to confirm your pickup point when you choose your current location."
-      }
+        "NSLocationWhenInUseUsageDescription": "ChaufX uses your location to confirm your pickup point when you choose your current location."
+      },
+      "bundleIdentifier": "com.anonymous.chaufxcustomer"
     },
     "android": {
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
-      ]
+        "ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.anonymous.chaufxcustomer"
     },
     "assetBundlePatterns": [
       "**/*"

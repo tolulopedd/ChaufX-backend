@@ -44,6 +44,10 @@ function formatDateInputValue(value?: string | null) {
   return new Date(value).toISOString().slice(0, 10);
 }
 
+function requestTypeLabel(value?: string) {
+  return value === "LATER" ? "Schedule later" : "ChaufX now";
+}
+
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-[#E5E7EB] bg-white px-4 py-4">
@@ -57,6 +61,7 @@ export default function TripsPage() {
   const { data, loading, error } = useAdminResource("/admin/dashboard", dashboardFallback);
   const [selectedId, setSelectedId] = useState("");
   const [search, setSearch] = useState("");
+  const [requestTypeFilter, setRequestTypeFilter] = useState("ALL");
   const [dateFilter, setDateFilter] = useState("");
 
   const filteredTrips = useMemo(() => {
@@ -64,6 +69,10 @@ export default function TripsPage() {
 
     return data.activeTrips.filter((trip: any) => {
       if (dateFilter && formatDateInputValue(trip.scheduledStartAt) !== dateFilter) {
+        return false;
+      }
+
+      if (requestTypeFilter !== "ALL" && trip.requestType !== requestTypeFilter) {
         return false;
       }
 
@@ -84,7 +93,7 @@ export default function TripsPage() {
 
       return haystack.includes(query);
     });
-  }, [data.activeTrips, dateFilter, search]);
+  }, [data.activeTrips, dateFilter, requestTypeFilter, search]);
 
   const selectedTrip = useMemo<any | null>(
     () => filteredTrips.find((trip: any) => trip.id === selectedId) ?? data.activeTrips.find((trip: any) => trip.id === selectedId) ?? null,
@@ -106,13 +115,22 @@ export default function TripsPage() {
         {loading ? <p className="text-sm text-slate-500">Loading active trips...</p> : null}
         {error ? <p className="text-sm text-amber-600">{error}</p> : null}
 
-        <div className="mb-4 grid gap-3 md:grid-cols-[1.4fr_0.8fr]">
+        <div className="mb-4 grid gap-3 md:grid-cols-[1.3fr_0.8fr_0.8fr]">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Filter by driver, customer, pickup, destination"
             className="w-full rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm outline-none transition focus:border-[#4F46E5]"
           />
+          <select
+            value={requestTypeFilter}
+            onChange={(event) => setRequestTypeFilter(event.target.value)}
+            className="w-full rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm outline-none transition focus:border-[#4F46E5]"
+          >
+            <option value="ALL">All request types</option>
+            <option value="NOW">ChaufX now</option>
+            <option value="LATER">Schedule later</option>
+          </select>
           <input
             type="date"
             value={dateFilter}
@@ -140,6 +158,7 @@ export default function TripsPage() {
                     </div>
                     <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
                       <span>{trip.customer?.user?.fullName ?? "Customer not available"}</span>
+                      <span>{requestTypeLabel(trip.requestType)}</span>
                       <span>{trip.status}</span>
                     </div>
                   </div>
@@ -186,6 +205,7 @@ export default function TripsPage() {
               <div className="grid gap-3 md:grid-cols-2">
                 <DetailField label="Driver" value={selectedTrip.assignedDriver?.user?.fullName ?? "Assigned driver"} />
                 <DetailField label="Customer" value={selectedTrip.customer?.user?.fullName ?? "Customer not available"} />
+                <DetailField label="Request type" value={requestTypeLabel(selectedTrip.requestType)} />
                 <DetailField label="Pickup" value={selectedTrip.pickupLocation} />
                 <DetailField label="Destination" value={selectedTrip.destinationLocation} />
                 <DetailField label="Trip status" value={selectedTrip.status} />

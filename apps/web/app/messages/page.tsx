@@ -10,7 +10,7 @@ export default function MessagesPage() {
   return (
     <AdminShell
       title="Messages"
-      description="Inbox for inquiry messages submitted from DriveMe website."
+      description="Inbox for inquiry messages submitted from ChaufX website."
     >
       <Panel title="Incoming messages" subtitle="Review new website inquiries and mark them resolved once handled.">
         {loading ? <p className="text-sm text-slate-500">Loading messages...</p> : null}

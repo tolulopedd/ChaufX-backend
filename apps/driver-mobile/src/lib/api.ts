@@ -1,38 +1,141 @@
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:4000/api";
+import { Platform } from "react-native";
+import Constants from "expo-constants";
 
-async function request<T>(path: string, token: string, options?: RequestInit) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(options?.headers ?? {})
-    }
-  });
+let resolvedApiBase: string | null = null;
 
-  const payload = await response.json();
+function normalizeApiBase(value: string) {
+  return value.replace(/\/+$/, "");
+}
 
-  if (!response.ok) {
-    throw new Error(payload.error?.message ?? "Request failed");
+function getDevHostBase() {
+  const hostUri =
+    Constants.expoConfig?.hostUri ??
+    (Constants as any).manifest2?.extra?.expoClient?.hostUri ??
+    (Constants as any).manifest?.debuggerHost;
+
+  if (!hostUri || typeof hostUri !== "string") {
+    return null;
   }
 
-  return payload as T;
+  const host = hostUri.split(":")[0];
+  if (!host) {
+    return null;
+  }
+
+  return `http://${host}:4000/api`;
+}
+
+function getCandidateApiBases() {
+  const candidates = new Set<string>();
+  const envBase = process.env.EXPO_PUBLIC_API_URL;
+
+  if (envBase) {
+    candidates.add(normalizeApiBase(envBase));
+  }
+
+  const devHostBase = getDevHostBase();
+  if (devHostBase) {
+    candidates.add(normalizeApiBase(devHostBase));
+  }
+
+  if (Platform.OS === "android") {
+    candidates.add("http://10.0.2.2:4000/api");
+    candidates.add("http://10.0.3.2:4000/api");
+  } else {
+    candidates.add("http://127.0.0.1:4000/api");
+    candidates.add("http://localhost:4000/api");
+  }
+
+  return Array.from(candidates);
+}
+
+async function requestAtBase<T>(base: string, path: string, token: string, options?: RequestInit) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const response = await fetch(`${base}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(options?.headers ?? {})
+      }
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? "Request failed");
+    }
+
+    resolvedApiBase = base;
+    return payload as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function request<T>(path: string, token: string, options?: RequestInit) {
+  const candidates = resolvedApiBase ? [resolvedApiBase, ...getCandidateApiBases()] : getCandidateApiBases();
+  const uniqueCandidates = Array.from(new Set(candidates));
+  let lastError: unknown = null;
+
+  for (const base of uniqueCandidates) {
+    try {
+      return await requestAtBase<T>(base, path, token, options);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+
+  throw new Error("Unable to reach the ChaufX API.");
 }
 
 export function login(email: string, password: string) {
-  return fetch(`${API_BASE}/auth/login`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ email, password })
-  }).then(async (response) => {
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message ?? "Login failed");
+  const candidates = resolvedApiBase ? [resolvedApiBase, ...getCandidateApiBases()] : getCandidateApiBases();
+  const uniqueCandidates = Array.from(new Set(candidates));
+
+  return (async () => {
+    let lastError: unknown = null;
+
+    for (const base of uniqueCandidates) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      try {
+        const response = await fetch(`${base}/auth/login`, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ email, password })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error?.message ?? "Login failed");
+        }
+        resolvedApiBase = base;
+        return payload;
+      } catch (error) {
+        lastError = error;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
-    return payload;
-  });
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new Error("Unable to reach the ChaufX API.");
+  })();
 }
 
 export function fetchDriverProfile(token: string) {

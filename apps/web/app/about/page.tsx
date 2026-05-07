@@ -4,8 +4,8 @@ import { PublicPageShell } from "../../components/public-page-shell";
 export default function AboutPage() {
   return (
     <PublicPageShell
-      heroTitle="About DriveMe"
-      heroCopy="DriveMe is a Canadian chauffeur service built around one simple idea: professional driving in the comfort of your own vehicle."
+      heroTitle="About ChaufX"
+      heroCopy="ChaufX is a Canadian chauffeur service built around one simple idea: professional driving in the comfort of your own vehicle."
     >
       <section className="bg-white">
         <div className="mx-auto max-w-5xl px-5 py-12 md:px-8">
@@ -14,7 +14,7 @@ export default function AboutPage() {
               Professional driving for daily life, important appointments, and longer journeys.
             </h2>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">
-              Whether it is a personal errand, a night out, a hospital appointment, or a busy workday, DriveMe helps customers save time while a vetted chauffeur drives their vehicle.
+              Whether it is a personal errand, a night out, a hospital appointment, or a busy workday, ChaufX helps customers save time while a vetted chauffeur drives their vehicle.
             </p>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
               We focus on simple booking, reliable arrival, senior-friendly support, and a clean operating system for approved chauffeurs and admins.

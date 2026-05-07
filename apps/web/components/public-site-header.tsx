@@ -14,7 +14,7 @@ const menus = [
   {
     label: "About",
     items: [
-      { label: "About DriveMe", href: "/about" },
+      { label: "About ChaufX", href: "/about" },
       { label: "Contact", href: "/contact" },
       { label: "Become a driver", href: "/driver/apply" },
       { label: "Feedback", href: "/feedback" },

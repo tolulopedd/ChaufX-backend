@@ -4,6 +4,7 @@ import { createBookingSchema } from "../src/modules/bookings/bookings.routes.js"
 describe("booking validation", () => {
   it("rejects too-short pickup labels", () => {
     const result = createBookingSchema.safeParse({
+      requestType: "NOW",
       pickupLocation: "A",
       pickupLat: 49.89,
       pickupLng: -97.13,

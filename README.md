@@ -1,6 +1,6 @@
-# DriveMe MVP
+# ChaufX MVP
 
-DriveMe is a multi-app chauffeur booking platform for vehicle owners, approved drivers, and platform admins. This monorepo reuses the clean visual feel of the RentSure starter while shifting the product into a production-oriented mobility MVP.
+ChaufX is a multi-app chauffeur booking platform for vehicle owners, approved drivers, and platform admins. This monorepo reuses the clean visual feel of the RentSure starter while shifting the product into a production-oriented mobility MVP.
 
 ## Architecture Summary
 
@@ -8,7 +8,7 @@ DriveMe is a multi-app chauffeur booking platform for vehicle owners, approved d
 - `apps/web`: Next.js public website plus admin dashboard routes, driver onboarding, driver login, and application tracking.
 - `apps/customer-mobile`: Expo app for customers to create bookings, review trip history, and access trip tracking only during the active window.
 - `apps/driver-mobile`: Expo app for approved drivers to manage availability, accept trips, and share live location during active trips.
-- `packages/design-tokens`: Shared DriveMe visual tokens inspired by the original RentSure blue-led identity.
+- `packages/design-tokens`: Shared ChaufX visual tokens inspired by the original RentSure blue-led identity.
 - `packages/config`: Shared business constants including the trip activation window logic.
 - `packages/types`: Shared domain types and status enums.
 - `packages/ui`: Shared branding helpers and formatting utilities.
@@ -44,9 +44,9 @@ cp apps/driver-mobile/.env.example apps/driver-mobile/.env
 4. Generate Prisma client, run migrations, and seed demo data:
 
 ```bash
-npm run prisma:generate -w @driveme/api
-npm run prisma:migrate -w @driveme/api
-npm run seed -w @driveme/api
+npm run prisma:generate -w @chaufx/api
+npm run prisma:migrate -w @chaufx/api
+npm run seed -w @chaufx/api
 ```
 
 5. Run the apps you need:
@@ -60,9 +60,9 @@ npm run dev:driver-mobile
 
 ## Demo Accounts
 
-- Admin: `admin@driveme.com` / `NewPass123$`
-- Customer: `owner@driveme.app` / `OwnerPass123$`
-- Driver: `driver@driveme.app` / `DriverPass123$`
+- Admin: `admin@chaufx.com` / `NewPass123$`
+- Customer: `owner@chaufx.app` / `OwnerPass123$`
+- Driver: `driver@chaufx.app` / `DriverPass123$`
 
 ## Delivery Checklist
 
