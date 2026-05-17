@@ -2,7 +2,7 @@ import { EmailVerificationPurpose, Prisma, UserRole } from "@prisma/client";
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import { asyncHandler } from "../../lib/http.js";
+import { asyncHandler, paramValue } from "../../lib/http.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { buildSession, createVerifiedCustomer, login, registerCustomer } from "./auth.service.js";
 import { prisma } from "../../lib/prisma.js";
@@ -12,6 +12,7 @@ import type { RefreshToken } from "@prisma/client";
 import { confirmEmailVerificationToken, issueEmailVerificationToken } from "../../lib/email-verification.js";
 import { sendTransactionalEmail } from "../../lib/email.js";
 import { env } from "../../config/env.js";
+import { issuePasswordResetToken, readPasswordResetToken, resetPasswordWithToken } from "../../lib/password-reset.js";
 
 const authLimiter = rateLimit({
   windowMs: 60_000,
@@ -42,6 +43,21 @@ const refreshSchema = z.object({
 const forgotPasswordSchema = z.object({
   email: z.email()
 });
+
+const passwordResetValidateSchema = z.object({
+  token: z.string().min(20)
+});
+
+const passwordResetConfirmSchema = z
+  .object({
+    token: z.string().min(20),
+    password: z.string().min(8),
+    confirmPassword: z.string().min(8)
+  })
+  .refine((value) => value.password === value.confirmPassword, {
+    path: ["confirmPassword"],
+    message: "Passwords do not match."
+  });
 
 const customerVerificationRequestSchema = z.object({
   fullName: z.string().min(2),
@@ -300,20 +316,83 @@ authRoutes.post(
     });
 
     if (user) {
+      const token = await issuePasswordResetToken(user.id);
+      const resetUrl = new URL("/reset-password", env.CLIENT_APP_URL);
+      resetUrl.searchParams.set("token", token);
+
+      const emailResult = await sendTransactionalEmail({
+        to: user.email,
+        subject: "Reset your ChaufX password",
+        html: `
+          <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
+            <p style="margin: 0 0 16px;">Hello ${user.fullName.trim().split(/\s+/)[0] ?? user.fullName},</p>
+            <p style="margin: 0 0 16px;">We received a request to reset your ChaufX password.</p>
+            <p style="margin: 0 0 16px;">Use the secure button below to choose a new password. This link will expire in 1 hour.</p>
+            <p style="margin: 24px 0;">
+              <a href="${resetUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+                Reset password
+              </a>
+            </p>
+            <p style="margin: 16px 0 8px;">If the button does not work, copy and paste this link into your browser:</p>
+            <p style="margin: 0 0 16px;"><a href="${resetUrl.toString()}" target="_blank" rel="noopener noreferrer">${resetUrl.toString()}</a></p>
+            <p style="margin: 0; color: #64748b;">If you did not request this change, you can safely ignore this email.</p>
+          </div>
+        `,
+        text: `Hello ${user.fullName.trim().split(/\s+/)[0] ?? user.fullName}, reset your ChaufX password here: ${resetUrl.toString()}`
+      });
+
       await prisma.notification.create({
         data: {
           userId: user.id,
           type: "APPLICATION_REVIEWED",
           title: "Password reset requested",
-          body: "A password reset was requested. Implement your provider flow here.",
+          body: "A password reset link was sent to your email address.",
           channel: "EMAIL",
-          status: "SENT"
+          status: "SENT",
+          meta: emailResult.delivered ? undefined : { previewUrl: resetUrl.toString() }
         }
       });
+
+      response.json({
+        message: "If the email exists, a password reset link has been sent.",
+        previewUrl: emailResult.delivered ? undefined : resetUrl.toString()
+      });
+      return;
     }
 
     response.json({
-      message: "If the email exists, a reset notification has been queued."
+      message: "If the email exists, a password reset link has been sent."
+    });
+  })
+);
+
+authRoutes.get(
+  "/auth/reset-password/validate",
+  authLimiter,
+  asyncHandler(async (request, response) => {
+    const { token } = passwordResetValidateSchema.parse({
+      token: paramValue(request.query.token)
+    });
+
+    const record = await readPasswordResetToken(token);
+
+    response.json({
+      email: record.user.email,
+      fullName: record.user.fullName
+    });
+  })
+);
+
+authRoutes.post(
+  "/auth/reset-password/confirm",
+  authLimiter,
+  asyncHandler(async (request, response) => {
+    const input = passwordResetConfirmSchema.parse(request.body);
+    const user = await resetPasswordWithToken(input.token, input.password);
+
+    response.json({
+      message: "Your password has been updated. You can now sign in.",
+      email: user.email
     });
   })
 );

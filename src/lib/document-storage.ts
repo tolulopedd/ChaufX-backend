@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { env } from "../config/env.js";
+import { AppError } from "../common/AppError.js";
 
 const storageRoot = fileURLToPath(new URL("../../storage/driver-documents", import.meta.url));
 const s3Protocol = "s3://";
@@ -134,17 +135,26 @@ export async function persistDriverApplicationDocument(options: {
   if (s3Client && env.AWS_S3_BUCKET) {
     const key = buildS3Key(options.applicationId, options.fileName, mimeType);
 
-    await s3Client.send(
-      new PutObjectCommand({
-        Bucket: env.AWS_S3_BUCKET,
-        Key: key,
-        Body: parsed.buffer,
-        ContentType: mimeType,
-        Metadata: {
-          originalFileName: options.fileName
-        }
-      })
-    );
+    try {
+      await s3Client.send(
+        new PutObjectCommand({
+          Bucket: env.AWS_S3_BUCKET,
+          Key: key,
+          Body: parsed.buffer,
+          ContentType: mimeType,
+          Metadata: {
+            originalFileName: options.fileName
+          }
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown S3 upload error";
+      throw new AppError(
+        `Unable to upload driver documents to secure storage. Please verify AWS_REGION, AWS_S3_BUCKET, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY on the backend service. (${message})`,
+        500,
+        "DOCUMENT_STORAGE_UPLOAD_FAILED"
+      );
+    }
 
     return {
       fileUrl: buildS3Reference(env.AWS_S3_BUCKET, key),
