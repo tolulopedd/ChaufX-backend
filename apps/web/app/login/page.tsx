@@ -53,6 +53,7 @@ function LoginPageContent() {
   const [signupPreviewUrl, setSignupPreviewUrl] = useState("");
 
   const [resetEmail, setResetEmail] = useState("");
+  const [resetPreviewUrl, setResetPreviewUrl] = useState("");
 
   useEffect(() => {
     const verified = searchParams.get("verified");
@@ -159,10 +160,12 @@ function LoginPageContent() {
     setLoading(true);
     setError("");
     setSuccess("");
+    setResetPreviewUrl("");
 
     try {
       const result = await requestPasswordReset(resetEmail);
-      setSuccess(result.message ?? "If the email exists, a reset notification has been queued.");
+      setResetPreviewUrl(result.previewUrl ?? "");
+      setSuccess(result.message ?? "If the email exists, a password reset link has been sent.");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to request password reset");
     } finally {
@@ -249,6 +252,15 @@ function LoginPageContent() {
 
                 {error ? <p className="rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p> : null}
                 {success ? <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</p> : null}
+                {resetPreviewUrl ? (
+                  <p className="rounded-2xl border border-dashed border-[#BFDBFE] bg-[#EFF6FF] px-4 py-3 text-sm text-[#1D4ED8]">
+                    Email delivery is not configured yet in this environment.{" "}
+                    <a href={resetPreviewUrl} className="font-semibold underline">
+                      Open password reset preview
+                    </a>
+                    .
+                  </p>
+                ) : null}
 
                 <button
                   type="submit"
