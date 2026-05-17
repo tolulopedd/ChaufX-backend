@@ -1,6 +1,26 @@
 import "dotenv/config";
 import { z } from "zod";
 
+function cleanEnvValue(value: unknown) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed;
+}
+
 const schema = z.object({
   PORT: z.coerce.number().default(4000),
   HOST: z.string().default("0.0.0.0"),
@@ -19,4 +39,8 @@ const schema = z.object({
   AWS_S3_DOCUMENT_PREFIX: z.string().default("driver-documents")
 });
 
-export const env = schema.parse(process.env);
+const parsedEnv = Object.fromEntries(
+  Object.entries(process.env).map(([key, value]) => [key, cleanEnvValue(value)])
+);
+
+export const env = schema.parse(parsedEnv);
