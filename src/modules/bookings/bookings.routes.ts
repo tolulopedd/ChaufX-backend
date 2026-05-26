@@ -14,6 +14,7 @@ import {
   resolveBookingPricing
 } from "./booking.service.js";
 import { createAuditLog } from "../../lib/audit.js";
+import { notifyUser, notifyUsers } from "../../lib/notifications.js";
 
 export const createBookingSchema = z.object({
   vehicleId: z.string().uuid().optional(),
@@ -104,42 +105,38 @@ bookingsRoutes.post(
     }
 
     if (drivers.length) {
-      await prisma.notification.createMany({
-        data: drivers.map((driver) => ({
+      await notifyUsers(
+        drivers.map((driver) => ({
           userId: driver.userId,
-          type: "BOOKING_SUBMITTED",
+          type: "BOOKING_SUBMITTED" as const,
           title: input.requestType === "NOW" ? "ChaufX now request" : "Scheduled drive request",
           body:
             input.requestType === "NOW"
               ? `${booking.pickupLocation} to ${booking.destinationLocation} · starting soon`
               : `${booking.pickupLocation} to ${booking.destinationLocation} · ${booking.scheduledStartAt.toLocaleString()}`,
-          channel: "PUSH",
-          status: "PENDING",
+          channel: "PUSH" as const,
           meta: {
             bookingId: booking.id,
             distanceKm: driver.distanceKm,
             requestType: booking.requestType
           }
         }))
-      });
+      );
     }
 
-    await prisma.notification.create({
-      data: {
-        userId: request.auth!.userId,
-        type: "BOOKING_SUBMITTED",
-        title: "Booking submitted",
-        body:
-          input.requestType === "NOW"
-            ? "We are routing your ChaufX now request to the nearest eligible drivers."
-            : "We are routing your scheduled drive to the nearest eligible drivers.",
-        channel: "IN_APP",
-        status: "SENT",
-        meta: {
-          bookingId: booking.id,
-          notifiedDrivers: drivers.length,
-          requestType: booking.requestType
-        }
+    await notifyUser({
+      userId: request.auth!.userId,
+      type: "BOOKING_SUBMITTED",
+      title: "Booking submitted",
+      body:
+        input.requestType === "NOW"
+          ? "We are routing your ChaufX now request to the nearest eligible drivers."
+          : "We are routing your scheduled drive to the nearest eligible drivers.",
+      channel: "IN_APP",
+      meta: {
+        bookingId: booking.id,
+        notifiedDrivers: drivers.length,
+        requestType: booking.requestType
       }
     });
 
@@ -367,28 +364,24 @@ bookingsRoutes.post(
       })
     ).userId;
 
-    await prisma.notification.createMany({
-      data: [
-        {
-          userId: customerUserId,
-          type: "DRIVER_ACCEPTED",
-          title: "Driver confirmed",
-          body: `${updatedBooking.assignedDriver?.user.fullName} accepted your request.`,
-          channel: "PUSH",
-          status: "PENDING",
-          meta: { bookingId: booking.id }
-        },
-        {
-          userId: request.auth!.userId,
-          type: "DRIVER_ACCEPTED",
-          title: "Trip assigned",
-          body: "The booking is now confirmed and will unlock at the trip window.",
-          channel: "IN_APP",
-          status: "SENT",
-          meta: { bookingId: booking.id }
-        }
-      ]
-    });
+    await notifyUsers([
+      {
+        userId: customerUserId,
+        type: "DRIVER_ACCEPTED",
+        title: "Driver confirmed",
+        body: `${updatedBooking.assignedDriver?.user.fullName} accepted your request.`,
+        channel: "PUSH",
+        meta: { bookingId: booking.id }
+      },
+      {
+        userId: request.auth!.userId,
+        type: "DRIVER_ACCEPTED",
+        title: "Trip assigned",
+        body: "The booking is now confirmed and will unlock at the trip window.",
+        channel: "IN_APP",
+        meta: { bookingId: booking.id }
+      }
+    ]);
 
     await createAuditLog({
       actorId: request.auth!.userId,

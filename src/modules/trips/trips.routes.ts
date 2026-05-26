@@ -6,6 +6,7 @@ import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { AppError } from "../../common/AppError.js";
 import { mapStateForBooking } from "../bookings/booking.service.js";
+import { notifyUser } from "../../lib/notifications.js";
 
 export const tripsRoutes = Router();
 
@@ -46,7 +47,7 @@ tripsRoutes.get(
 );
 
 tripsRoutes.post(
-  "/trips/:bookingId/start",
+  "/trips/:bookingId/enroute",
   requireRole(["driver"]),
   asyncHandler(async (request, response) => {
     const bookingId = paramValue(request.params.bookingId);
@@ -68,7 +69,72 @@ tripsRoutes.post(
 
     const mapState = mapStateForBooking(booking);
     if (booking.status !== BookingStatus.ACCEPTED) {
-      throw new AppError("Only accepted trips can be started", 409, "TRIP_NOT_READY");
+      throw new AppError("Only accepted trips can be marked en route", 409, "TRIP_NOT_READY");
+    }
+
+    if (!mapState.active) {
+      throw new AppError("Trip tools are still locked until the scheduled activation window opens", 409, "MAP_LOCKED");
+    }
+
+    const updated = await prisma.booking.update({
+      where: { id: booking.id },
+      data: {
+        status: BookingStatus.ENROUTE,
+        trip: {
+          update: {
+            navigationEnabled: true,
+            liveTrackingEnabled: true
+          }
+        }
+      },
+      include: {
+        trip: true
+      }
+    });
+
+    const customer = await prisma.customerProfile.findUniqueOrThrow({
+      where: {
+        id: booking.customerId
+      }
+    });
+
+    await notifyUser({
+      userId: customer.userId,
+      type: "DRIVER_ACCEPTED",
+      title: "Driver en route",
+      body: "Your driver is heading to the pickup location now.",
+      channel: "PUSH",
+      meta: { bookingId: booking.id }
+    });
+
+    response.json(updated);
+  })
+);
+
+tripsRoutes.post(
+  "/trips/:bookingId/start",
+  requireRole(["driver"]),
+  asyncHandler(async (request, response) => {
+    const bookingId = paramValue(request.params.bookingId);
+    const driver = await prisma.driver.findUniqueOrThrow({
+      where: {
+        userId: request.auth!.userId
+      }
+    });
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: {
+        id: bookingId
+      }
+    });
+
+    if (booking.assignedDriverId !== driver.id) {
+      throw new AppError("You are not assigned to this booking", 403, "FORBIDDEN");
+    }
+
+    const mapState = mapStateForBooking(booking);
+    if (booking.status !== BookingStatus.ACCEPTED && booking.status !== BookingStatus.ENROUTE) {
+      throw new AppError("Only accepted or en route trips can be started", 409, "TRIP_NOT_READY");
     }
 
     if (!mapState.active) {
@@ -99,16 +165,13 @@ tripsRoutes.post(
       }
     });
 
-    await prisma.notification.create({
-      data: {
-        userId: customer.userId,
-        type: "TRIP_STARTED",
-        title: "Trip started",
-        body: "Your driver has started the trip and live tracking is now active.",
-        channel: "PUSH",
-        status: "PENDING",
-        meta: { bookingId: booking.id }
-      }
+    await notifyUser({
+      userId: customer.userId,
+      type: "TRIP_STARTED",
+      title: "Trip started",
+      body: "Your driver has started the trip and live tracking is now active.",
+      channel: "PUSH",
+      meta: { bookingId: booking.id }
     });
 
     response.json(updated);
@@ -174,16 +237,13 @@ tripsRoutes.post(
       }
     });
 
-    await prisma.notification.create({
-      data: {
-        userId: customer.userId,
-        type: "TRIP_COMPLETED",
-        title: "Trip completed",
-        body: "You can now review your driver and record payment.",
-        channel: "PUSH",
-        status: "PENDING",
-        meta: { bookingId: booking.id }
-      }
+    await notifyUser({
+      userId: customer.userId,
+      type: "TRIP_COMPLETED",
+      title: "Trip completed",
+      body: "You can now review your driver and record payment.",
+      channel: "PUSH",
+      meta: { bookingId: booking.id }
     });
 
     response.json(updated);
