@@ -1,6 +1,5 @@
 import { AccountStatus, UserRole } from "@prisma/client";
 import { defaultServiceZones } from "../src/lib/app-config.js";
-import { haversineDistanceKm } from "../src/modules/bookings/booking.service.js";
 import { hashPassword } from "../src/lib/auth.js";
 import { prisma } from "../src/lib/prisma.js";
 
@@ -35,14 +34,16 @@ async function main() {
   await prisma.pricingSetting.createMany({
     data: [
       {
-        code: "BASE_FEE",
-        name: "Base booking fee",
-        value: 18
+        code: "PROVINCE::Manitoba::FLAT_FEE",
+        name: "Manitoba flat hourly fee",
+        value: 35,
+        description: "Flat hourly fee for Manitoba"
       },
       {
-        code: "PER_MINUTE",
-        name: "Per minute rate",
-        value: 0.85
+        code: "PROVINCE::Manitoba::MIN_HOURS",
+        name: "Manitoba minimum booking hours",
+        value: 2,
+        description: "Minimum booking hours for Manitoba"
       }
     ]
   });
@@ -50,7 +51,7 @@ async function main() {
   const admin = await prisma.user.create({
     data: {
       fullName: "ChaufX Admin",
-      email: "admin@chaufx.com",
+      email: "admin@chaufx.ca",
       phone: "+12045550110",
       passwordHash: await hashPassword("NewPass123$"),
       role: UserRole.ADMIN,
@@ -65,7 +66,7 @@ async function main() {
     }
   });
 
-  const customer = await prisma.user.create({
+  await prisma.user.create({
     data: {
       fullName: "Jordan Vehicle Owner",
       email: "owner@chaufx.app",
@@ -143,7 +144,7 @@ async function main() {
     }
   });
 
-  const driver = await prisma.driver.create({
+  await prisma.driver.create({
     data: {
       userId: driverUser.id,
       applicationId: application.id,
@@ -158,119 +159,6 @@ async function main() {
       currentLongitude: zones[0].centerLng,
       locationUpdatedAt: new Date()
     }
-  });
-
-  const vehicle = customer.customerProfile!.vehicles[0];
-  const startAt = new Date(Date.now() + 60 * 60 * 1000);
-  const activeStart = new Date(Date.now() - 10 * 60 * 1000);
-
-  const pendingBooking = await prisma.booking.create({
-    data: {
-      customerId: customer.customerProfile!.id,
-      vehicleId: vehicle.id,
-      requestType: "LATER",
-      pickupLocation: "201 Portage Ave, Winnipeg",
-      pickupLat: 49.8959,
-      pickupLng: -97.1385,
-      destinationLocation: "The Forks, Winnipeg",
-      destinationLat: 49.8870,
-      destinationLng: -97.1318,
-      scheduledStartAt: startAt,
-      expectedDurationMinutes: 90,
-      specialNotes: "Need assistance with downtown parking",
-      vehicleDetails: "Toyota Camry - midnight blue",
-      fareEstimate: 94.5,
-      zoneCode: zones[0].code,
-      activationWindowStartAt: new Date(startAt.getTime() - 15 * 60 * 1000),
-      activationWindowEndAt: new Date(startAt.getTime() + 120 * 60 * 1000)
-    }
-  });
-
-  await prisma.bookingDispatch.create({
-    data: {
-      bookingId: pendingBooking.id,
-      driverId: driver.id,
-      distanceKm: haversineDistanceKm(49.8959, -97.1385, zones[0].centerLat, zones[0].centerLng),
-      status: "PENDING"
-    }
-  });
-
-  const activeBooking = await prisma.booking.create({
-    data: {
-      customerId: customer.customerProfile!.id,
-      vehicleId: vehicle.id,
-      assignedDriverId: driver.id,
-      requestType: "NOW",
-      pickupLocation: "275 Broadway, Winnipeg",
-      pickupLat: 49.8844,
-      pickupLng: -97.1423,
-      destinationLocation: "St. Vital Centre, Winnipeg",
-      destinationLat: 49.8277,
-      destinationLng: -97.1147,
-      scheduledStartAt: new Date(Date.now() - 5 * 60 * 1000),
-      expectedDurationMinutes: 45,
-      specialNotes: "Trip already in progress",
-      vehicleDetails: "Toyota Camry - midnight blue",
-      fareEstimate: 56.25,
-      zoneCode: zones[0].code,
-      activationWindowStartAt: new Date(activeStart.getTime() - 5 * 60 * 1000),
-      activationWindowEndAt: new Date(activeStart.getTime() + 90 * 60 * 1000),
-      status: "ACTIVE",
-      acceptedAt: new Date(Date.now() - 20 * 60 * 1000),
-      trip: {
-        create: {
-          driverId: driver.id,
-          status: "ACTIVE",
-          startedAt: new Date(Date.now() - 5 * 60 * 1000),
-          navigationEnabled: true,
-          liveTrackingEnabled: true
-        }
-      }
-    }
-  });
-
-  await prisma.location.createMany({
-    data: [
-      {
-        bookingId: activeBooking.id,
-        driverId: driver.id,
-        latitude: 49.8716,
-        longitude: -97.1287,
-        heading: 180,
-        speedKph: 32
-      },
-      {
-        bookingId: activeBooking.id,
-        driverId: driver.id,
-        latitude: 49.8503,
-        longitude: -97.121,
-        heading: 190,
-        speedKph: 28
-      }
-    ]
-  });
-
-  await prisma.notification.createMany({
-    data: [
-      {
-        userId: customer.id,
-        type: "BOOKING_SUBMITTED",
-        title: "Booking submitted",
-        body: "Your next driver request is awaiting an available driver.",
-        channel: "IN_APP",
-        status: "SENT",
-        meta: { bookingId: pendingBooking.id }
-      },
-      {
-        userId: driverUser.id,
-        type: "TRIP_STARTED",
-        title: "Active trip",
-        body: "Live tracking is enabled for your current assignment.",
-        channel: "IN_APP",
-        status: "SENT",
-        meta: { bookingId: activeBooking.id }
-      }
-    ]
   });
 
   console.log("Seed complete");

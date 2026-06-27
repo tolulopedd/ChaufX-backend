@@ -26,7 +26,25 @@ driversRoutes.get(
       }
     });
 
-    response.json(driver);
+    const ratingAggregate = await prisma.rating.aggregate({
+      where: {
+        reviewedUserId: driver.userId
+      },
+      _avg: {
+        score: true
+      },
+      _count: {
+        _all: true
+      }
+    });
+
+    response.json({
+      ...driver,
+      ratingSummary: {
+        averageScore: ratingAggregate._avg.score,
+        totalRatings: ratingAggregate._count._all
+      }
+    });
   })
 );
 

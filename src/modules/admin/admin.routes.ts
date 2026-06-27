@@ -198,7 +198,7 @@ adminRoutes.get(
       prisma.booking.count({
         where: {
           status: {
-            in: ["PENDING", "ACCEPTED", "ENROUTE", "ACTIVE"]
+            in: ["AWAITING_PAYMENT", "PENDING", "ACCEPTED", "ENROUTE", "ACTIVE"]
           }
         }
       }),
@@ -567,7 +567,8 @@ adminRoutes.post(
     const isCancelled = status === BookingStatus.CANCELLED;
     const isCompleted = status === BookingStatus.COMPLETED;
     const isOperational = status === BookingStatus.ACTIVE || status === BookingStatus.ENROUTE;
-    const isScheduledTrip = status === BookingStatus.PENDING || status === BookingStatus.ACCEPTED;
+    const isScheduledTrip =
+      status === BookingStatus.AWAITING_PAYMENT || status === BookingStatus.PENDING || status === BookingStatus.ACCEPTED;
     const nextTripStatus = isCancelled
       ? TripStatus.CANCELLED
       : isCompleted
@@ -735,7 +736,7 @@ adminRoutes.get(
       prisma.booking.findMany({
         where: {
           status: {
-            in: ["PENDING", "ACCEPTED", "ENROUTE", "ACTIVE"]
+            in: ["AWAITING_PAYMENT", "PENDING", "ACCEPTED", "ENROUTE", "ACTIVE"]
           }
         },
         include: {

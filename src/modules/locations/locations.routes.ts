@@ -5,6 +5,20 @@ import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { AppError } from "../../common/AppError.js";
 import { mapStateForBooking } from "../bookings/booking.service.js";
+import { notifyUser } from "../../lib/notifications.js";
+import { BookingStatus } from "@prisma/client";
+
+function haversineDistanceKm(startLat: number, startLng: number, endLat: number, endLng: number) {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const deltaLat = toRadians(endLat - startLat);
+  const deltaLng = toRadians(endLng - startLng);
+  const a =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(toRadians(startLat)) * Math.cos(toRadians(endLat)) * Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2);
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 export const locationsRoutes = Router();
 
@@ -28,7 +42,14 @@ locationsRoutes.post(
       where: { userId: request.auth!.userId }
     });
     const booking = await prisma.booking.findUniqueOrThrow({
-      where: { id: input.bookingId }
+      where: { id: input.bookingId },
+      include: {
+        customer: {
+          include: {
+            user: true
+          }
+        }
+      }
     });
 
     if (booking.assignedDriverId !== driver.id) {
@@ -52,6 +73,40 @@ locationsRoutes.post(
       }
     });
 
+    const nearPickupDistanceKm = haversineDistanceKm(
+      input.latitude,
+      input.longitude,
+      booking.pickupLat,
+      booking.pickupLng
+    );
+
+    if (booking.status === BookingStatus.ENROUTE && nearPickupDistanceKm <= 0.35) {
+      const alreadyNotified = await prisma.notification.findFirst({
+        where: {
+          userId: booking.customer.userId,
+          type: "DRIVER_ARRIVED",
+          meta: {
+            path: ["bookingId"],
+            equals: booking.id
+          }
+        }
+      });
+
+      if (!alreadyNotified) {
+        await notifyUser({
+          userId: booking.customer.userId,
+          type: "DRIVER_ARRIVED",
+          title: "Driver almost there",
+          body: "Your driver is almost at the pickup location.",
+          channel: "PUSH",
+          meta: {
+            bookingId: booking.id,
+            distanceKm: Number(nearPickupDistanceKm.toFixed(2))
+          }
+        });
+      }
+    }
+
     response.status(201).json(location);
   })
 );
@@ -59,6 +114,10 @@ locationsRoutes.post(
 locationsRoutes.get(
   "/locations/:bookingId",
   asyncHandler(async (request, response) => {
+    response.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    response.set("Pragma", "no-cache");
+    response.set("Expires", "0");
+
     const bookingId = paramValue(request.params.bookingId);
     const booking = await prisma.booking.findUniqueOrThrow({
       where: { id: bookingId }

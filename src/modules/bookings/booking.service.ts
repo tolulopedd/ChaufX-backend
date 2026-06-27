@@ -1,19 +1,60 @@
-import { BookingStatus } from "@prisma/client";
+import { BookingDispatchStatus, BookingStatus } from "@prisma/client";
 import { appConfig, buildActivationWindow, isTripWindowActive } from "../../lib/app-config.js";
 import { AppError } from "../../common/AppError.js";
 import { prisma } from "../../lib/prisma.js";
+import { notifyUser, notifyUsers } from "../../lib/notifications.js";
 
 const provincePricingPrefix = "PROVINCE::";
 const cityPricingPrefix = "CITY::";
+
+const provinceMatchers: Array<{ province: string; patterns: RegExp[] }> = [
+  { province: "Alberta", patterns: [/\balberta\b/i, /\bab\b/i] },
+  { province: "British Columbia", patterns: [/\bbritish columbia\b/i, /\bbc\b/i] },
+  { province: "Manitoba", patterns: [/\bmanitoba\b/i, /\bmb\b/i] },
+  { province: "New Brunswick", patterns: [/\bnew brunswick\b/i, /\bnb\b/i] },
+  { province: "Newfoundland and Labrador", patterns: [/\bnewfoundland and labrador\b/i, /\bnl\b/i] },
+  { province: "Nova Scotia", patterns: [/\bnova scotia\b/i, /\bns\b/i] },
+  { province: "Ontario", patterns: [/\bontario\b/i, /\bon\b/i] },
+  { province: "Prince Edward Island", patterns: [/\bprince edward island\b/i, /\bpei\b/i, /\bpe\b/i] },
+  { province: "Quebec", patterns: [/\bquebec\b/i, /\bqc\b/i, /\bqu\b/i] },
+  { province: "Saskatchewan", patterns: [/\bsaskatchewan\b/i, /\bsk\b/i] },
+  { province: "Northwest Territories", patterns: [/\bnorthwest territories\b/i, /\bnt\b/i] },
+  { province: "Nunavut", patterns: [/\bnunavut\b/i, /\bnu\b/i] },
+  { province: "Yukon", patterns: [/\byukon\b/i, /\byt\b/i] }
+];
 
 function decodePricingKeyPart(value: string) {
   return decodeURIComponent(value);
 }
 
 function inferServiceRegion(zoneCode: string, pickupLocation?: string, destinationLocation?: string) {
-  const combined = `${pickupLocation ?? ""} ${destinationLocation ?? ""}`.toLowerCase();
+  const pickupParts = String(pickupLocation ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const destinationParts = String(destinationLocation ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const allParts = [...pickupParts, ...destinationParts];
+  const combined = allParts.join(", ");
 
-  if (zoneCode.startsWith("WPG-") || combined.includes("winnipeg")) {
+  for (const matcher of provinceMatchers) {
+    const provinceIndex = allParts.findIndex((part) => matcher.patterns.some((pattern) => pattern.test(part)));
+    if (provinceIndex >= 0) {
+      const cityCandidate = allParts
+        .slice(Math.max(0, provinceIndex - 1), provinceIndex)
+        .reverse()
+        .find((part) => /^[A-Za-z][A-Za-z .'-]+$/.test(part) && !matcher.patterns.some((pattern) => pattern.test(part)));
+
+      return {
+        province: matcher.province,
+        city: cityCandidate ? cityCandidate.replace(/\s+/g, " ").trim() : undefined
+      };
+    }
+  }
+
+  if (/\bwinnipeg\b/i.test(combined) || zoneCode.startsWith("WPG-")) {
     return { province: "Manitoba", city: "Winnipeg" };
   }
 
@@ -40,7 +81,7 @@ export async function resolveBookingPricing(params: {
     }
   });
 
-  let provinceFlatFee = 29;
+  let provinceFlatFee = 35;
   let provinceMinHours = 2;
   let cityFlatFee: number | null = null;
   let cityMinHours: number | null = null;
@@ -254,6 +295,115 @@ export async function createBookingRecord(input: {
   });
 
   return booking;
+}
+
+export async function dispatchBookingToEligibleDrivers(bookingId: string) {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: {
+      customer: {
+        include: {
+          user: true
+        }
+      },
+      payment: true,
+      dispatches: {
+        where: {
+          status: {
+            in: [BookingDispatchStatus.PENDING, BookingDispatchStatus.ACCEPTED]
+          }
+        },
+        select: {
+          id: true
+        }
+      }
+    }
+  });
+
+  if (!booking) {
+    throw new AppError("Booking not found", 404, "BOOKING_NOT_FOUND");
+  }
+
+  if (
+    (booking.status !== BookingStatus.AWAITING_PAYMENT && booking.status !== BookingStatus.PENDING) ||
+    booking.assignedDriverId
+  ) {
+    return { booking, notifiedDrivers: 0, skipped: true as const };
+  }
+
+  if (!booking.payment || booking.payment.status !== "RECORDED") {
+    return { booking, notifiedDrivers: 0, skipped: true as const };
+  }
+
+  if (booking.dispatches.length > 0) {
+    return { booking, notifiedDrivers: booking.dispatches.length, skipped: true as const };
+  }
+
+  if (booking.status === BookingStatus.AWAITING_PAYMENT) {
+    await prisma.booking.update({
+      where: { id: booking.id },
+      data: {
+        status: BookingStatus.PENDING
+      }
+    });
+    booking.status = BookingStatus.PENDING;
+  }
+
+  const drivers = await findEligibleDrivers(
+    booking.zoneCode,
+    booking.scheduledStartAt,
+    booking.expectedDurationMinutes,
+    Number(booking.pickupLat),
+    Number(booking.pickupLng)
+  );
+
+  if (drivers.length) {
+    await prisma.bookingDispatch.createMany({
+      data: drivers.map((driver) => ({
+        bookingId: booking.id,
+        driverId: driver.id,
+        distanceKm: driver.distanceKm,
+        status: BookingDispatchStatus.PENDING
+      }))
+    });
+
+    await notifyUsers(
+      drivers.map((driver) => ({
+        userId: driver.userId,
+        type: "BOOKING_SUBMITTED" as const,
+        title: booking.requestType === "NOW" ? "ChaufX now request" : "Scheduled drive request",
+        body:
+          booking.requestType === "NOW"
+            ? `${booking.pickupLocation} to ${booking.destinationLocation} · starting soon`
+            : `${booking.pickupLocation} to ${booking.destinationLocation} · ${booking.scheduledStartAt.toLocaleString()}`,
+        channel: "PUSH" as const,
+        meta: {
+          bookingId: booking.id,
+          distanceKm: driver.distanceKm,
+          requestType: booking.requestType
+        }
+      }))
+    );
+  }
+
+  await notifyUser({
+    userId: booking.customer.userId,
+    type: "BOOKING_SUBMITTED",
+    title: drivers.length ? "Driver matching started" : "Payment recorded",
+    body: drivers.length
+      ? booking.requestType === "NOW"
+        ? "Payment received. We are now routing your ChaufX now request to the nearest eligible drivers."
+        : "Payment received. We are now routing your scheduled drive to the nearest eligible drivers."
+      : "Payment received. We could not find an eligible driver yet, but we will keep checking nearby availability.",
+    channel: "IN_APP",
+    meta: {
+      bookingId: booking.id,
+      notifiedDrivers: drivers.length,
+      requestType: booking.requestType
+    }
+  });
+
+  return { booking, notifiedDrivers: drivers.length, skipped: false as const };
 }
 
 export async function ensureCustomerCanCancel(bookingId: string, customerId: string) {

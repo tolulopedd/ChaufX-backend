@@ -27,6 +27,7 @@ enum DriverApplicationStatus {
 }
 
 enum BookingStatus {
+  AWAITING_PAYMENT
   PENDING
   ACCEPTED
   ENROUTE
@@ -118,12 +119,30 @@ model User {
   adminUser       AdminUser?
   refreshTokens   RefreshToken[]
   passwordResetTokens PasswordResetToken[]
+  pushDevices     PushDevice[]
   notifications   Notification[]
   applications    DriverApplication[]
   ratingsWritten  Rating[]         @relation("RatingReviewer")
   ratingsReceived Rating[]         @relation("RatingReviewed")
   auditLogs       AuditLog[]       @relation("AuditActor")
   reviewedApplications DriverApplication[] @relation("ApplicationReviewer")
+}
+
+model PushDevice {
+  id            String   @id @default(uuid())
+  userId        String
+  expoPushToken String   @unique
+  platform      String
+  appVariant    String
+  disabledAt    DateTime?
+  lastSeenAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, disabledAt])
+  @@index([expoPushToken, disabledAt])
 }
 
 model PasswordResetToken {
@@ -268,7 +287,7 @@ model Booking {
   zoneCode                String
   activationWindowStartAt DateTime
   activationWindowEndAt   DateTime
-  status                  BookingStatus @default(PENDING)
+  status                  BookingStatus @default(AWAITING_PAYMENT)
   acceptedAt              DateTime?
   completedAt             DateTime?
   cancelledAt             DateTime?
