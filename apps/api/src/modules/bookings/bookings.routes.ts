@@ -10,10 +10,10 @@ import {
   createBookingRecord,
   driverHasOverlap,
   ensureCustomerCanCancel,
-  findEligibleDrivers,
   resolveBookingPricing
 } from "./booking.service.js";
 import { createAuditLog } from "../../lib/audit.js";
+import { notifyUser, notifyUsers } from "../../lib/notifications.js";
 
 export const createBookingSchema = z.object({
   vehicleId: z.string().uuid().optional(),
@@ -34,7 +34,9 @@ export const createBookingSchema = z.object({
 const estimateBookingSchema = z.object({
   scheduledStartAt: z.coerce.date(),
   expectedDurationMinutes: z.coerce.number().int().min(60),
-  zoneCode: z.string().min(3)
+  zoneCode: z.string().min(3),
+  pickupLocation: z.string().min(3).optional(),
+  destinationLocation: z.string().min(3).optional()
 });
 
 export const bookingsRoutes = Router();
@@ -49,7 +51,9 @@ bookingsRoutes.post(
     const activationWindow = buildActivationWindow(input.scheduledStartAt, input.expectedDurationMinutes);
     const pricing = await resolveBookingPricing({
       zoneCode: input.zoneCode,
-      expectedDurationMinutes: input.expectedDurationMinutes
+      expectedDurationMinutes: input.expectedDurationMinutes,
+      pickupLocation: input.pickupLocation,
+      destinationLocation: input.destinationLocation
     });
 
     response.json({
@@ -84,68 +88,22 @@ bookingsRoutes.post(
       ...input
     });
 
-    const drivers = await findEligibleDrivers(
-      input.zoneCode,
-      input.scheduledStartAt,
-      input.expectedDurationMinutes,
-      input.pickupLat,
-      input.pickupLng
-    );
-
-    if (drivers.length) {
-      await prisma.bookingDispatch.createMany({
-        data: drivers.map((driver) => ({
-          bookingId: booking.id,
-          driverId: driver.id,
-          distanceKm: driver.distanceKm,
-          status: BookingDispatchStatus.PENDING
-        }))
-      });
-    }
-
-    if (drivers.length) {
-      await prisma.notification.createMany({
-        data: drivers.map((driver) => ({
-          userId: driver.userId,
-          type: "BOOKING_SUBMITTED",
-          title: input.requestType === "NOW" ? "ChaufX now request" : "Scheduled drive request",
-          body:
-            input.requestType === "NOW"
-              ? `${booking.pickupLocation} to ${booking.destinationLocation} · starting soon`
-              : `${booking.pickupLocation} to ${booking.destinationLocation} · ${booking.scheduledStartAt.toLocaleString()}`,
-          channel: "PUSH",
-          status: "PENDING",
-          meta: {
-            bookingId: booking.id,
-            distanceKm: driver.distanceKm,
-            requestType: booking.requestType
-          }
-        }))
-      });
-    }
-
-    await prisma.notification.create({
-      data: {
-        userId: request.auth!.userId,
-        type: "BOOKING_SUBMITTED",
-        title: "Booking submitted",
-        body:
-          input.requestType === "NOW"
-            ? "We are routing your ChaufX now request to the nearest eligible drivers."
-            : "We are routing your scheduled drive to the nearest eligible drivers.",
-        channel: "IN_APP",
-        status: "SENT",
-        meta: {
-          bookingId: booking.id,
-          notifiedDrivers: drivers.length,
-          requestType: booking.requestType
-        }
+    await notifyUser({
+      userId: request.auth!.userId,
+      type: "BOOKING_SUBMITTED",
+      title: "Payment required",
+      body: "Your booking has been created. Complete Stripe payment before driver matching can begin.",
+      channel: "IN_APP",
+      meta: {
+        bookingId: booking.id,
+        notifiedDrivers: 0,
+        requestType: booking.requestType
       }
     });
 
     response.status(201).json({
       booking,
-      notifiedDrivers: drivers.length
+      notifiedDrivers: 0
     });
   })
 );
@@ -167,7 +125,10 @@ bookingsRoutes.get(
             include: {
               user: true
             }
-          }
+          },
+          payment: true,
+          rating: true,
+          trip: true
         },
         orderBy: {
           scheduledStartAt: "desc"
@@ -188,7 +149,7 @@ bookingsRoutes.get(
           OR: [
             { assignedDriverId: driver.id },
             {
-              status: "PENDING",
+              status: BookingStatus.PENDING,
               dispatches: {
                 some: {
                   driverId: driver.id,
@@ -204,6 +165,8 @@ bookingsRoutes.get(
               user: true
             }
           },
+          payment: true,
+          trip: true,
           dispatches: {
             where: {
               driverId: driver.id
@@ -286,6 +249,10 @@ bookingsRoutes.post(
       where: { id: bookingId }
     });
 
+    if (booking.status === BookingStatus.AWAITING_PAYMENT) {
+      throw new AppError("This booking is still awaiting customer payment", 409, "PAYMENT_REQUIRED");
+    }
+
     if (booking.status !== BookingStatus.PENDING) {
       throw new AppError("This booking is no longer available", 409, "BOOKING_UNAVAILABLE");
     }
@@ -367,28 +334,24 @@ bookingsRoutes.post(
       })
     ).userId;
 
-    await prisma.notification.createMany({
-      data: [
-        {
-          userId: customerUserId,
-          type: "DRIVER_ACCEPTED",
-          title: "Driver confirmed",
-          body: `${updatedBooking.assignedDriver?.user.fullName} accepted your request.`,
-          channel: "PUSH",
-          status: "PENDING",
-          meta: { bookingId: booking.id }
-        },
-        {
-          userId: request.auth!.userId,
-          type: "DRIVER_ACCEPTED",
-          title: "Trip assigned",
-          body: "The booking is now confirmed and will unlock at the trip window.",
-          channel: "IN_APP",
-          status: "SENT",
-          meta: { bookingId: booking.id }
-        }
-      ]
-    });
+    await notifyUsers([
+      {
+        userId: customerUserId,
+        type: "DRIVER_ACCEPTED",
+        title: "Driver confirmed",
+        body: `${updatedBooking.assignedDriver?.user.fullName} accepted your request.`,
+        channel: "PUSH",
+        meta: { bookingId: booking.id }
+      },
+      {
+        userId: request.auth!.userId,
+        type: "DRIVER_ACCEPTED",
+        title: "Trip assigned",
+        body: "The booking is now confirmed and will unlock at the trip window.",
+        channel: "IN_APP",
+        meta: { bookingId: booking.id }
+      }
+    ]);
 
     await createAuditLog({
       actorId: request.auth!.userId,
@@ -496,6 +459,10 @@ bookingsRoutes.post(
       where: { id: bookingId }
     });
 
+    if (booking.status === BookingStatus.AWAITING_PAYMENT) {
+      throw new AppError("This booking is still awaiting customer payment", 409, "PAYMENT_REQUIRED");
+    }
+
     const overlap = await driverHasOverlap(input.driverId, booking.scheduledStartAt, booking.expectedDurationMinutes);
     if (overlap) {
       throw new AppError("Selected driver has an overlapping trip", 409, "OVERLAPPING_BOOKING");
@@ -574,7 +541,17 @@ bookingsRoutes.post(
     const booking = await prisma.booking.findUniqueOrThrow({
       where: { id: bookingId },
       include: {
-        customer: true
+        customer: {
+          include: {
+            user: true
+          }
+        },
+        payment: true,
+        assignedDriver: {
+          include: {
+            user: true
+          }
+        }
       }
     });
 
@@ -584,6 +561,10 @@ bookingsRoutes.post(
 
     if (booking.status !== BookingStatus.COMPLETED || !booking.assignedDriverId) {
       throw new AppError("Ratings are only available after trip completion", 409, "TRIP_NOT_COMPLETED");
+    }
+
+    if (booking.payment?.status !== "RECORDED") {
+      throw new AppError("Ratings are only available after a paid trip is completed", 409, "PAYMENT_REQUIRED");
     }
 
     const driver = await prisma.driver.findUniqueOrThrow({
@@ -606,6 +587,25 @@ bookingsRoutes.post(
         comment: input.comment
       }
     });
+
+    await notifyUsers([
+      {
+        userId: request.auth!.userId,
+        type: "TRIP_COMPLETED",
+        title: "Rating submitted",
+        body: "Thanks for rating your driver.",
+        channel: "IN_APP",
+        meta: { bookingId: booking.id, score: rating.score }
+      },
+      {
+        userId: driver.userId,
+        type: "TRIP_COMPLETED",
+        title: "New rider rating",
+        body: `${booking.customer.user.fullName ?? "A customer"} rated your completed trip ${rating.score}/5.`,
+        channel: "IN_APP",
+        meta: { bookingId: booking.id, score: rating.score, comment: rating.comment ?? null }
+      }
+    ]);
 
     response.status(201).json(rating);
   })

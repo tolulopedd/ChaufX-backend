@@ -10,7 +10,11 @@ import { driverOnboardingRoutes } from "./modules/driver-onboarding/driver-onboa
 import { bookingsRoutes } from "./modules/bookings/bookings.routes.js";
 import { tripsRoutes } from "./modules/trips/trips.routes.js";
 import { locationsRoutes } from "./modules/locations/locations.routes.js";
-import { paymentsRoutes } from "./modules/payments/payments.routes.js";
+import {
+  paymentCheckoutCancelHandler,
+  paymentCheckoutCompleteHandler,
+  paymentsRoutes
+} from "./modules/payments/payments.routes.js";
 import { notificationsRoutes } from "./modules/notifications/notifications.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
 import { contactMessageRoutes } from "./modules/contact-messages/contact-messages.routes.js";
@@ -29,6 +33,8 @@ export function createApp() {
   app.use(express.urlencoded({ extended: true, limit: "25mb" }));
   app.use(morgan("dev"));
 
+  app.get("/api/payments/checkout/complete", paymentCheckoutCompleteHandler);
+  app.get("/api/payments/checkout/cancel", paymentCheckoutCancelHandler);
   app.use("/api", healthRoutes);
   app.use("/api", authRoutes);
   app.use("/api", driverOnboardingRoutes);
