@@ -35,6 +35,8 @@ const canadaRegions = [
 
 const provincePricingPrefix = "PROVINCE::";
 const cityPricingPrefix = "CITY::";
+const settlementConfigPrefix = "SETTLEMENT::";
+const platformSharePercentCode = `${settlementConfigPrefix}PLATFORM_SHARE_PERCENT`;
 
 function firstNameFromFullName(fullName: string) {
   return fullName.trim().split(/\s+/)[0] ?? fullName.trim();
@@ -180,6 +182,31 @@ function parseCityPricing(settings: Array<{ code: string; value: number }>) {
   return Array.from(map.values()).sort((left, right) =>
     `${left.province} ${left.city}`.localeCompare(`${right.province} ${right.city}`)
   );
+}
+
+function parseSettlementConfig(settings: Array<{ code: string; value: number }>) {
+  const platformSharePercent = settings.find((setting) => setting.code === platformSharePercentCode)?.value ?? 30;
+  const normalizedPlatformSharePercent = Math.max(0, Math.min(100, platformSharePercent));
+
+  return {
+    platformSharePercent: normalizedPlatformSharePercent,
+    driverSharePercent: Math.max(0, 100 - normalizedPlatformSharePercent)
+  };
+}
+
+function getSettlementWeekStart(dateInput: string | Date) {
+  const date = new Date(dateInput);
+  const normalized = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const weekday = normalized.getUTCDay();
+  const daysSinceMonday = (weekday + 6) % 7;
+  normalized.setUTCDate(normalized.getUTCDate() - daysSinceMonday);
+  return normalized;
+}
+
+function getSettlementWeekEnd(weekStart: Date) {
+  const weekEnd = new Date(weekStart);
+  weekEnd.setUTCDate(weekStart.getUTCDate() + 6);
+  return weekEnd;
 }
 
 adminRoutes.get(
@@ -779,6 +806,157 @@ adminRoutes.get(
 );
 
 adminRoutes.get(
+  "/admin/settlements",
+  asyncHandler(async (_request, response) => {
+    const [pricing, completedBookings] = await Promise.all([
+      prisma.pricingSetting.findMany(),
+      prisma.booking.findMany({
+        where: {
+          status: BookingStatus.COMPLETED,
+          assignedDriverId: {
+            not: null
+          },
+          payment: {
+            is: {
+              status: PaymentStatus.RECORDED
+            }
+          }
+        },
+        include: {
+          assignedDriver: {
+            include: {
+              user: true
+            }
+          },
+          customer: {
+            include: {
+              user: true
+            }
+          },
+          payment: true
+        },
+        orderBy: {
+          completedAt: "desc"
+        }
+      })
+    ]);
+
+    const settlementConfig = parseSettlementConfig(pricing);
+    const grouped = new Map<
+      string,
+      {
+        id: string;
+        weekStart: string;
+        weekEnd: string;
+        driverId: string;
+        driverName: string;
+        driverEmail: string;
+        tripCount: number;
+        grossAmount: number;
+        platformSharePercent: number;
+        platformShareAmount: number;
+        driverShareAmount: number;
+        latestCompletedAt: string | null;
+        trips: Array<{
+          bookingId: string;
+          completedAt: string | null;
+          amount: number;
+          customerName: string;
+          pickupLocation: string;
+          destinationLocation: string;
+        }>;
+      }
+    >();
+
+    for (const booking of completedBookings) {
+      if (!booking.assignedDriver || !booking.payment) {
+        continue;
+      }
+
+      const settlementDate = booking.completedAt ?? booking.payment.recordedAt ?? booking.updatedAt;
+      const weekStart = getSettlementWeekStart(settlementDate);
+      const weekEnd = getSettlementWeekEnd(weekStart);
+      const weekStartKey = weekStart.toISOString().slice(0, 10);
+      const weekEndKey = weekEnd.toISOString().slice(0, 10);
+      const groupKey = `${booking.assignedDriverId}::${weekStartKey}`;
+      const grossAmount = Number(booking.payment.amount ?? booking.fareEstimate ?? 0);
+      const platformShareAmount = Number(
+        ((grossAmount * settlementConfig.platformSharePercent) / 100).toFixed(2)
+      );
+      const driverShareAmount = Number((grossAmount - platformShareAmount).toFixed(2));
+
+      const current = grouped.get(groupKey) ?? {
+        id: groupKey,
+        weekStart: weekStartKey,
+        weekEnd: weekEndKey,
+        driverId: booking.assignedDriver.id,
+        driverName: booking.assignedDriver.user?.fullName ?? "Assigned driver",
+        driverEmail: booking.assignedDriver.user?.email ?? "",
+        tripCount: 0,
+        grossAmount: 0,
+        platformSharePercent: settlementConfig.platformSharePercent,
+        platformShareAmount: 0,
+        driverShareAmount: 0,
+        latestCompletedAt: null,
+        trips: []
+      };
+
+      current.tripCount += 1;
+      current.grossAmount = Number((current.grossAmount + grossAmount).toFixed(2));
+      current.platformShareAmount = Number((current.platformShareAmount + platformShareAmount).toFixed(2));
+      current.driverShareAmount = Number((current.driverShareAmount + driverShareAmount).toFixed(2));
+      current.latestCompletedAt =
+        !current.latestCompletedAt || new Date(settlementDate) > new Date(current.latestCompletedAt)
+          ? settlementDate.toISOString()
+          : current.latestCompletedAt;
+      current.trips.push({
+        bookingId: booking.id,
+        completedAt: booking.completedAt?.toISOString() ?? null,
+        amount: grossAmount,
+        customerName: booking.customer?.user?.fullName ?? "Customer",
+        pickupLocation: booking.pickupLocation,
+        destinationLocation: booking.destinationLocation
+      });
+
+      grouped.set(groupKey, current);
+    }
+
+    const settlements = Array.from(grouped.values()).sort((left, right) => {
+      if (left.weekStart === right.weekStart) {
+        return left.driverName.localeCompare(right.driverName);
+      }
+
+      return right.weekStart.localeCompare(left.weekStart);
+    });
+
+    const summary = settlements.reduce(
+      (totals, settlement) => {
+        totals.grossAmount = Number((totals.grossAmount + settlement.grossAmount).toFixed(2));
+        totals.platformShareAmount = Number((totals.platformShareAmount + settlement.platformShareAmount).toFixed(2));
+        totals.driverShareAmount = Number((totals.driverShareAmount + settlement.driverShareAmount).toFixed(2));
+        totals.tripCount += settlement.tripCount;
+        return totals;
+      },
+      {
+        grossAmount: 0,
+        platformShareAmount: 0,
+        driverShareAmount: 0,
+        tripCount: 0
+      }
+    );
+
+    response.json({
+      settlementConfig,
+      summary: {
+        ...summary,
+        weeklyRows: settlements.length
+      },
+      settlements
+    });
+  })
+);
+
+adminRoutes.get(
   "/admin/settings",
   asyncHandler(async (_request, response) => {
     const [zones, pricing] = await Promise.all([
@@ -792,7 +970,8 @@ adminRoutes.get(
       zones,
       pricing,
       provincePricing: parseProvincePricing(pricing),
-      cityPricing: parseCityPricing(pricing)
+      cityPricing: parseCityPricing(pricing),
+      settlementConfig: parseSettlementConfig(pricing)
     });
   })
 );
@@ -815,7 +994,10 @@ adminRoutes.post(
           flatFee: z.coerce.number().min(0),
           minHours: z.coerce.number().min(1)
         })
-      )
+      ),
+      settlementConfig: z.object({
+        platformSharePercent: z.coerce.number().min(0).max(100)
+      })
     });
 
     const input = schema.parse(request.body);
@@ -823,7 +1005,11 @@ adminRoutes.post(
     await prisma.$transaction(async (tx) => {
       await tx.pricingSetting.deleteMany({
         where: {
-          OR: [{ code: { startsWith: provincePricingPrefix } }, { code: { startsWith: cityPricingPrefix } }]
+          OR: [
+            { code: { startsWith: provincePricingPrefix } },
+            { code: { startsWith: cityPricingPrefix } },
+            { code: { startsWith: settlementConfigPrefix } }
+          ]
         }
       });
 
@@ -857,7 +1043,16 @@ adminRoutes.post(
         }
       ]);
 
-      const rows = [...provinceRows, ...cityRows];
+      const settlementRows = [
+        {
+          code: platformSharePercentCode,
+          name: "Platform share percent",
+          value: input.settlementConfig.platformSharePercent,
+          description: "Platform revenue share percentage applied to completed paid trips."
+        }
+      ];
+
+      const rows = [...provinceRows, ...cityRows, ...settlementRows];
 
       if (rows.length) {
         await tx.pricingSetting.createMany({
@@ -877,7 +1072,8 @@ adminRoutes.post(
       zones,
       pricing,
       provincePricing: parseProvincePricing(pricing),
-      cityPricing: parseCityPricing(pricing)
+      cityPricing: parseCityPricing(pricing),
+      settlementConfig: parseSettlementConfig(pricing)
     });
   })
 );
