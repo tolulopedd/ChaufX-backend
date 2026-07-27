@@ -11,6 +11,7 @@ driversRoutes.use(requireAuth);
 
 const settlementConfigPrefix = "SETTLEMENT::";
 const platformSharePercentCode = `${settlementConfigPrefix}PLATFORM_SHARE_PERCENT`;
+type SettlementStatus = "PENDING" | "PAID";
 
 function getSettlementWeekStart(dateInput: string | Date) {
   const date = new Date(dateInput);
@@ -31,7 +32,7 @@ driversRoutes.get(
   "/drivers/me",
   requireRole(["driver"]),
   asyncHandler(async (request, response) => {
-    const [driver, ratingAggregate, pricingSettings] = await Promise.all([
+    const [driver, ratingAggregate, pricingSettings, payoutRecords] = await Promise.all([
       prisma.driver.findUniqueOrThrow({
         where: { userId: request.auth!.userId },
         include: {
@@ -71,12 +72,22 @@ driversRoutes.get(
             startsWith: settlementConfigPrefix
           }
         }
+      }),
+      prisma.driverSettlement.findMany({
+        where: {
+          driver: {
+            userId: request.auth!.userId
+          }
+        },
+        orderBy: {
+          weekStart: "desc"
+        }
       })
     ]);
 
     const platformSharePercent = Math.max(
       0,
-      Math.min(100, pricingSettings.find((setting) => setting.code === platformSharePercentCode)?.value ?? 30)
+      Math.min(100, pricingSettings.find((setting: { code: string; value: number }) => setting.code === platformSharePercentCode)?.value ?? 30)
     );
     const driverSharePercent = Math.max(0, 100 - platformSharePercent);
 
@@ -111,44 +122,138 @@ driversRoutes.get(
         weekEnd: string;
         tripCount: number;
         grossAmount: number;
+        platformSharePercent: number;
+        platformShareAmount: number;
         driverShareAmount: number;
+        status: SettlementStatus;
+        paidAt: string | null;
+        payoutReference: string | null;
+        notes: string | null;
         latestCompletedAt: string;
+        trips: Array<{
+          bookingId: string;
+          completedAt: string | null;
+          amount: number;
+          customerName: string;
+          pickupLocation: string;
+          destinationLocation: string;
+        }>;
       }
     >();
 
     for (const booking of paidCompletedBookings) {
       const grossAmount = Number(booking.payment?.amount ?? booking.fareEstimate ?? 0);
+      const platformShareAmount = Number(((grossAmount * platformSharePercent) / 100).toFixed(2));
       const driverShareAmount = Number(((grossAmount * driverSharePercent) / 100).toFixed(2));
       const settlementDate = booking.completedAt ?? booking.payment?.recordedAt ?? booking.updatedAt;
       const weekStart = getSettlementWeekStart(settlementDate);
       const weekEnd = getSettlementWeekEnd(weekStart);
       const key = weekStart.toISOString();
-      const current = settlementRows.get(key) ?? {
+      const current: {
+        id: string;
+        weekStart: string;
+        weekEnd: string;
+        tripCount: number;
+        grossAmount: number;
+        platformSharePercent: number;
+        platformShareAmount: number;
+        driverShareAmount: number;
+        status: SettlementStatus;
+        paidAt: string | null;
+        payoutReference: string | null;
+        notes: string | null;
+        latestCompletedAt: string;
+        trips: Array<{
+          bookingId: string;
+          completedAt: string | null;
+          amount: number;
+          customerName: string;
+          pickupLocation: string;
+          destinationLocation: string;
+        }>;
+      } = settlementRows.get(key) ?? {
         id: key,
         weekStart: weekStart.toISOString(),
         weekEnd: weekEnd.toISOString(),
         tripCount: 0,
         grossAmount: 0,
+        platformSharePercent,
+        platformShareAmount: 0,
         driverShareAmount: 0,
-        latestCompletedAt: new Date(settlementDate).toISOString()
+        status: "PENDING",
+        paidAt: null,
+        payoutReference: null,
+        notes: null,
+        latestCompletedAt: new Date(settlementDate).toISOString(),
+        trips: []
       };
 
       current.tripCount += 1;
       current.grossAmount = Number((current.grossAmount + grossAmount).toFixed(2));
+      current.platformShareAmount = Number((current.platformShareAmount + platformShareAmount).toFixed(2));
       current.driverShareAmount = Number((current.driverShareAmount + driverShareAmount).toFixed(2));
 
       if (new Date(settlementDate).toISOString() > current.latestCompletedAt) {
         current.latestCompletedAt = new Date(settlementDate).toISOString();
       }
 
+      current.trips.push({
+        bookingId: booking.id,
+        completedAt: booking.completedAt?.toISOString() ?? null,
+        amount: grossAmount,
+        customerName: booking.customer?.user?.fullName ?? "Customer",
+        pickupLocation: booking.pickupLocation,
+        destinationLocation: booking.destinationLocation
+      });
+
       settlementRows.set(key, current);
+    }
+
+    for (const payoutRecord of payoutRecords) {
+      const key = payoutRecord.weekStart.toISOString();
+      const current = settlementRows.get(key);
+
+      if (current) {
+        current.grossAmount = payoutRecord.grossAmount;
+        current.platformSharePercent = payoutRecord.platformSharePercent;
+        current.platformShareAmount = payoutRecord.platformShareAmount;
+        current.driverShareAmount = payoutRecord.driverShareAmount;
+        current.tripCount = payoutRecord.tripCount;
+        current.status = payoutRecord.status;
+        current.paidAt = payoutRecord.paidAt?.toISOString() ?? null;
+        current.payoutReference = payoutRecord.payoutReference ?? null;
+        current.notes = payoutRecord.notes ?? null;
+        settlementRows.set(key, current);
+        continue;
+      }
+
+      settlementRows.set(key, {
+        id: key,
+        weekStart: payoutRecord.weekStart.toISOString(),
+        weekEnd: payoutRecord.weekEnd.toISOString(),
+        tripCount: payoutRecord.tripCount,
+        grossAmount: payoutRecord.grossAmount,
+        platformSharePercent: payoutRecord.platformSharePercent,
+        platformShareAmount: payoutRecord.platformShareAmount,
+        driverShareAmount: payoutRecord.driverShareAmount,
+        status: payoutRecord.status,
+        paidAt: payoutRecord.paidAt?.toISOString() ?? null,
+        payoutReference: payoutRecord.payoutReference ?? null,
+        notes: payoutRecord.notes ?? null,
+        latestCompletedAt: payoutRecord.updatedAt.toISOString(),
+        trips: []
+      });
     }
 
     const weeklySettlementRows = Array.from(settlementRows.values()).sort((left, right) =>
       right.weekStart.localeCompare(left.weekStart)
     );
 
-    const currentWeekSummary = paidCompletedBookings.reduce(
+    const currentWeekSummary = paidCompletedBookings.reduce<{
+      tripCount: number;
+      grossAmount: number;
+      driverShareAmount: number;
+    }>(
       (totals, booking: (typeof paidCompletedBookings)[number]) => {
         const settlementDate = booking.completedAt ?? booking.payment?.recordedAt ?? booking.updatedAt;
         const weekStart = getSettlementWeekStart(settlementDate);
@@ -175,6 +280,18 @@ driversRoutes.get(
       0
     );
     const lifetimeDriverShareAmount = Number(((lifetimeGrossAmount * driverSharePercent) / 100).toFixed(2));
+    const paidOutDriverShareAmount = Number(
+      payoutRecords
+        .filter((record) => record.status === "PAID")
+        .reduce((sum: number, record: { driverShareAmount: number }) => sum + record.driverShareAmount, 0)
+        .toFixed(2)
+    );
+    const outstandingDriverShareAmount = Number(
+      payoutRecords
+        .filter((record) => record.status !== "PAID")
+        .reduce((sum: number, record: { driverShareAmount: number }) => sum + record.driverShareAmount, 0)
+        .toFixed(2)
+    );
 
     response.json({
       ...driver,
@@ -190,6 +307,8 @@ driversRoutes.get(
         completedPaidTripsCount: paidCompletedBookings.length,
         lifetimeGrossAmount,
         lifetimeDriverShareAmount,
+        outstandingDriverShareAmount,
+        paidOutDriverShareAmount,
         currentWeekTripCount: currentWeekSummary.tripCount,
         currentWeekGrossAmount: currentWeekSummary.grossAmount,
         currentWeekDriverShareAmount: currentWeekSummary.driverShareAmount

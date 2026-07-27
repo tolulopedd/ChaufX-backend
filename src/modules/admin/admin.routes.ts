@@ -35,8 +35,11 @@ const canadaRegions = [
 
 const provincePricingPrefix = "PROVINCE::";
 const cityPricingPrefix = "CITY::";
+const fallbackPricingPrefix = "FALLBACK::";
 const settlementConfigPrefix = "SETTLEMENT::";
 const platformSharePercentCode = `${settlementConfigPrefix}PLATFORM_SHARE_PERCENT`;
+const fallbackFlatFeeCode = `${fallbackPricingPrefix}FLAT_FEE`;
+const fallbackMinHoursCode = `${fallbackPricingPrefix}MIN_HOURS`;
 
 function firstNameFromFullName(fullName: string) {
   return fullName.trim().split(/\s+/)[0] ?? fullName.trim();
@@ -182,6 +185,13 @@ function parseCityPricing(settings: Array<{ code: string; value: number }>) {
   return Array.from(map.values()).sort((left, right) =>
     `${left.province} ${left.city}`.localeCompare(`${right.province} ${right.city}`)
   );
+}
+
+function parseFallbackPricing(settings: Array<{ code: string; value: number }>) {
+  return {
+    flatFee: settings.find((setting) => setting.code === fallbackFlatFeeCode)?.value ?? 35,
+    minHours: settings.find((setting) => setting.code === fallbackMinHoursCode)?.value ?? 2
+  };
 }
 
 function parseSettlementConfig(settings: Array<{ code: string; value: number }>) {
@@ -808,7 +818,7 @@ adminRoutes.get(
 adminRoutes.get(
   "/admin/settlements",
   asyncHandler(async (_request, response) => {
-    const [pricing, completedBookings] = await Promise.all([
+    const [pricing, completedBookings, payoutRecords] = await Promise.all([
       prisma.pricingSetting.findMany(),
       prisma.booking.findMany({
         where: {
@@ -838,6 +848,16 @@ adminRoutes.get(
         orderBy: {
           completedAt: "desc"
         }
+      }),
+      prisma.driverSettlement.findMany({
+        include: {
+          driver: {
+            include: {
+              user: true
+            }
+          }
+        },
+        orderBy: [{ weekStart: "desc" }, { createdAt: "desc" }]
       })
     ]);
 
@@ -856,6 +876,10 @@ adminRoutes.get(
         platformSharePercent: number;
         platformShareAmount: number;
         driverShareAmount: number;
+        status: "PENDING" | "PAID";
+        paidAt: string | null;
+        payoutReference: string | null;
+        notes: string | null;
         latestCompletedAt: string | null;
         trips: Array<{
           bookingId: string;
@@ -885,7 +909,32 @@ adminRoutes.get(
       );
       const driverShareAmount = Number((grossAmount - platformShareAmount).toFixed(2));
 
-      const current = grouped.get(groupKey) ?? {
+      const current: {
+        id: string;
+        weekStart: string;
+        weekEnd: string;
+        driverId: string;
+        driverName: string;
+        driverEmail: string;
+        tripCount: number;
+        grossAmount: number;
+        platformSharePercent: number;
+        platformShareAmount: number;
+        driverShareAmount: number;
+        status: "PENDING" | "PAID";
+        paidAt: string | null;
+        payoutReference: string | null;
+        notes: string | null;
+        latestCompletedAt: string | null;
+        trips: Array<{
+          bookingId: string;
+          completedAt: string | null;
+          amount: number;
+          customerName: string;
+          pickupLocation: string;
+          destinationLocation: string;
+        }>;
+      } = grouped.get(groupKey) ?? {
         id: groupKey,
         weekStart: weekStartKey,
         weekEnd: weekEndKey,
@@ -897,6 +946,10 @@ adminRoutes.get(
         platformSharePercent: settlementConfig.platformSharePercent,
         platformShareAmount: 0,
         driverShareAmount: 0,
+        status: "PENDING",
+        paidAt: null,
+        payoutReference: null,
+        notes: null,
         latestCompletedAt: null,
         trips: []
       };
@@ -921,6 +974,47 @@ adminRoutes.get(
       grouped.set(groupKey, current);
     }
 
+    for (const record of payoutRecords) {
+      const weekStartKey = record.weekStart.toISOString().slice(0, 10);
+      const weekEndKey = record.weekEnd.toISOString().slice(0, 10);
+      const groupKey = `${record.driverId}::${weekStartKey}`;
+      const current = grouped.get(groupKey);
+
+      if (current) {
+        current.platformSharePercent = record.platformSharePercent;
+        current.grossAmount = record.grossAmount;
+        current.platformShareAmount = record.platformShareAmount;
+        current.driverShareAmount = record.driverShareAmount;
+        current.tripCount = record.tripCount;
+        current.status = record.status;
+        current.paidAt = record.paidAt?.toISOString() ?? null;
+        current.payoutReference = record.payoutReference ?? null;
+        current.notes = record.notes ?? null;
+        grouped.set(groupKey, current);
+        continue;
+      }
+
+      grouped.set(groupKey, {
+        id: groupKey,
+        weekStart: weekStartKey,
+        weekEnd: weekEndKey,
+        driverId: record.driverId,
+        driverName: record.driver.user?.fullName ?? "Assigned driver",
+        driverEmail: record.driver.user?.email ?? "",
+        tripCount: record.tripCount,
+        grossAmount: record.grossAmount,
+        platformSharePercent: record.platformSharePercent,
+        platformShareAmount: record.platformShareAmount,
+        driverShareAmount: record.driverShareAmount,
+        status: record.status,
+        paidAt: record.paidAt?.toISOString() ?? null,
+        payoutReference: record.payoutReference ?? null,
+        notes: record.notes ?? null,
+        latestCompletedAt: null,
+        trips: []
+      });
+    }
+
     const settlements = Array.from(grouped.values()).sort((left, right) => {
       if (left.weekStart === right.weekStart) {
         return left.driverName.localeCompare(right.driverName);
@@ -935,13 +1029,25 @@ adminRoutes.get(
         totals.platformShareAmount = Number((totals.platformShareAmount + settlement.platformShareAmount).toFixed(2));
         totals.driverShareAmount = Number((totals.driverShareAmount + settlement.driverShareAmount).toFixed(2));
         totals.tripCount += settlement.tripCount;
+        totals.pendingRows += settlement.status === "PAID" ? 0 : 1;
+        totals.paidRows += settlement.status === "PAID" ? 1 : 0;
+        totals.pendingDriverShareAmount = Number(
+          (totals.pendingDriverShareAmount + (settlement.status === "PAID" ? 0 : settlement.driverShareAmount)).toFixed(2)
+        );
+        totals.paidDriverShareAmount = Number(
+          (totals.paidDriverShareAmount + (settlement.status === "PAID" ? settlement.driverShareAmount : 0)).toFixed(2)
+        );
         return totals;
       },
       {
         grossAmount: 0,
         platformShareAmount: 0,
         driverShareAmount: 0,
-        tripCount: 0
+        tripCount: 0,
+        pendingRows: 0,
+        paidRows: 0,
+        pendingDriverShareAmount: 0,
+        paidDriverShareAmount: 0
       }
     );
 
@@ -952,6 +1058,159 @@ adminRoutes.get(
         weeklyRows: settlements.length
       },
       settlements
+    });
+  })
+);
+
+adminRoutes.post(
+  "/admin/settlements/:driverId/:weekStart/status",
+  asyncHandler(async (request, response) => {
+    const schema = z.object({
+      status: z.enum(["PENDING", "PAID"]),
+      payoutReference: z.string().trim().max(120).optional().nullable(),
+      notes: z.string().trim().max(500).optional().nullable()
+    });
+
+    const input = schema.parse(request.body);
+    const driverId = paramValue(request.params.driverId);
+    const weekStartParam = paramValue(request.params.weekStart);
+    const weekStart = new Date(`${weekStartParam}T00:00:00.000Z`);
+
+    if (Number.isNaN(weekStart.getTime())) {
+      throw new AppError("A valid settlement week is required.", 400, "INVALID_SETTLEMENT_PERIOD");
+    }
+
+    const weekEnd = getSettlementWeekEnd(weekStart);
+    const nextWeekStart = new Date(weekStart);
+    nextWeekStart.setUTCDate(nextWeekStart.getUTCDate() + 7);
+
+    const [driver, pricing, bookings] = await Promise.all([
+      prisma.driver.findUnique({
+        where: { id: driverId },
+        include: {
+          user: true
+        }
+      }),
+      prisma.pricingSetting.findMany(),
+      prisma.booking.findMany({
+        where: {
+          assignedDriverId: driverId,
+          status: BookingStatus.COMPLETED,
+          payment: {
+            is: {
+              status: PaymentStatus.RECORDED
+            }
+          },
+          OR: [
+            {
+              completedAt: {
+                gte: weekStart,
+                lt: nextWeekStart
+              }
+            },
+            {
+              completedAt: null,
+              payment: {
+                is: {
+                  recordedAt: {
+                    gte: weekStart,
+                    lt: nextWeekStart
+                  }
+                }
+              }
+            }
+          ]
+        },
+        include: {
+          payment: true
+        }
+      })
+    ]);
+
+    if (!driver) {
+      throw new AppError("Driver account not found.", 404, "DRIVER_NOT_FOUND");
+    }
+
+    if (!bookings.length) {
+      throw new AppError("No completed paid trips were found for that payout week.", 404, "SETTLEMENT_NOT_FOUND");
+    }
+
+    const settlementConfig = parseSettlementConfig(pricing);
+    const grossAmount = Number(
+      bookings.reduce((sum, booking) => sum + Number(booking.payment?.amount ?? booking.fareEstimate ?? 0), 0).toFixed(2)
+    );
+    const platformShareAmount = Number(
+      ((grossAmount * settlementConfig.platformSharePercent) / 100).toFixed(2)
+    );
+    const driverShareAmount = Number((grossAmount - platformShareAmount).toFixed(2));
+
+    const settlement = await prisma.driverSettlement.upsert({
+      where: {
+        driverId_weekStart: {
+          driverId,
+          weekStart
+        }
+      },
+      create: {
+        driverId,
+        weekStart,
+        weekEnd,
+        status: input.status,
+        grossAmount,
+        platformSharePercent: settlementConfig.platformSharePercent,
+        platformShareAmount,
+        driverShareAmount,
+        tripCount: bookings.length,
+        paidAt: input.status === "PAID" ? new Date() : null,
+        payoutReference: input.payoutReference || null,
+        notes: input.notes || null
+      },
+      update: {
+        weekEnd,
+        status: input.status,
+        grossAmount,
+        platformSharePercent: settlementConfig.platformSharePercent,
+        platformShareAmount,
+        driverShareAmount,
+        tripCount: bookings.length,
+        paidAt: input.status === "PAID" ? new Date() : null,
+        payoutReference: input.payoutReference || null,
+        notes: input.notes || null
+      }
+    });
+
+    await createAuditLog({
+      actorId: request.auth?.userId,
+      action: input.status === "PAID" ? "admin.settlement.mark_paid" : "admin.settlement.reopen",
+      entityType: "DriverSettlement",
+      entityId: settlement.id,
+      details: {
+        driverId,
+        driverEmail: driver.user?.email ?? null,
+        weekStart: weekStart.toISOString(),
+        grossAmount,
+        driverShareAmount,
+        platformShareAmount,
+        payoutReference: input.payoutReference || null
+      }
+    });
+
+    response.json({
+      settlement: {
+        id: settlement.id,
+        driverId,
+        driverName: driver.user?.fullName ?? "Assigned driver",
+        status: settlement.status,
+        weekStart: settlement.weekStart.toISOString(),
+        weekEnd: settlement.weekEnd.toISOString(),
+        tripCount: settlement.tripCount,
+        grossAmount: settlement.grossAmount,
+        platformShareAmount: settlement.platformShareAmount,
+        driverShareAmount: settlement.driverShareAmount,
+        paidAt: settlement.paidAt?.toISOString() ?? null,
+        payoutReference: settlement.payoutReference,
+        notes: settlement.notes
+      }
     });
   })
 );
@@ -971,6 +1230,7 @@ adminRoutes.get(
       pricing,
       provincePricing: parseProvincePricing(pricing),
       cityPricing: parseCityPricing(pricing),
+      fallbackPricing: parseFallbackPricing(pricing),
       settlementConfig: parseSettlementConfig(pricing)
     });
   })
@@ -995,6 +1255,13 @@ adminRoutes.post(
           minHours: z.coerce.number().min(1)
         })
       ),
+      fallbackPricing: z
+        .object({
+          flatFee: z.coerce.number().min(0),
+          minHours: z.coerce.number().min(1)
+        })
+        .optional()
+        .default({ flatFee: 35, minHours: 2 }),
       settlementConfig: z.object({
         platformSharePercent: z.coerce.number().min(0).max(100)
       })
@@ -1008,6 +1275,7 @@ adminRoutes.post(
           OR: [
             { code: { startsWith: provincePricingPrefix } },
             { code: { startsWith: cityPricingPrefix } },
+            { code: { startsWith: fallbackPricingPrefix } },
             { code: { startsWith: settlementConfigPrefix } }
           ]
         }
@@ -1052,7 +1320,22 @@ adminRoutes.post(
         }
       ];
 
-      const rows = [...provinceRows, ...cityRows, ...settlementRows];
+      const fallbackRows = [
+        {
+          code: fallbackFlatFeeCode,
+          name: "Fallback flat fee",
+          value: input.fallbackPricing.flatFee,
+          description: "Flat hourly fee when pickup pricing is outside configured Canada regions."
+        },
+        {
+          code: fallbackMinHoursCode,
+          name: "Fallback minimum booking hours",
+          value: input.fallbackPricing.minHours,
+          description: "Minimum booking hours when pickup pricing is outside configured Canada regions."
+        }
+      ];
+
+      const rows = [...provinceRows, ...cityRows, ...fallbackRows, ...settlementRows];
 
       if (rows.length) {
         await tx.pricingSetting.createMany({
@@ -1073,6 +1356,7 @@ adminRoutes.post(
       pricing,
       provincePricing: parseProvincePricing(pricing),
       cityPricing: parseCityPricing(pricing),
+      fallbackPricing: parseFallbackPricing(pricing),
       settlementConfig: parseSettlementConfig(pricing)
     });
   })

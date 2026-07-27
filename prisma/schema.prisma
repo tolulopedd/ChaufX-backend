@@ -55,6 +55,11 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum DriverSettlementStatus {
+  PENDING
+  PAID
+}
+
 enum NotificationType {
   BOOKING_SUBMITTED
   DRIVER_ACCEPTED
@@ -214,6 +219,7 @@ model Driver {
   bookingDispatches BookingDispatch[]
   documents       Document[]
   locationUpdates Location[]
+  settlements     DriverSettlement[]
 }
 
 model AdminUser {
@@ -443,6 +449,30 @@ model PricingSetting {
   description String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model DriverSettlement {
+  id                   String                 @id @default(uuid())
+  driverId             String
+  weekStart            DateTime
+  weekEnd              DateTime
+  status               DriverSettlementStatus @default(PENDING)
+  grossAmount          Float
+  platformSharePercent Float
+  platformShareAmount  Float
+  driverShareAmount    Float
+  tripCount            Int
+  paidAt               DateTime?
+  payoutReference      String?
+  notes                String?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@unique([driverId, weekStart])
+  @@index([status, weekStart])
+  @@index([driverId, weekStart])
 }
 
 model RefreshToken {

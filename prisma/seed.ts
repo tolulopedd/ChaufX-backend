@@ -44,6 +44,18 @@ async function main() {
         name: "Manitoba minimum booking hours",
         value: 2,
         description: "Minimum booking hours for Manitoba"
+      },
+      {
+        code: "FALLBACK::FLAT_FEE",
+        name: "Fallback flat hourly fee",
+        value: 35,
+        description: "Flat hourly fee when pickup pricing is outside configured Canada regions."
+      },
+      {
+        code: "FALLBACK::MIN_HOURS",
+        name: "Fallback minimum booking hours",
+        value: 2,
+        description: "Minimum booking hours when pickup pricing is outside configured Canada regions."
       }
     ]
   });

@@ -6,6 +6,8 @@ import { notifyUser, notifyUsers } from "../../lib/notifications.js";
 
 const provincePricingPrefix = "PROVINCE::";
 const cityPricingPrefix = "CITY::";
+const fallbackPricingPrefix = "FALLBACK::";
+const fallbackPricingLabel = "Outside configured region";
 
 const provinceMatchers: Array<{ province: string; patterns: RegExp[] }> = [
   { province: "Alberta", patterns: [/\balberta\b/i, /\bab\b/i] },
@@ -23,26 +25,21 @@ const provinceMatchers: Array<{ province: string; patterns: RegExp[] }> = [
   { province: "Yukon", patterns: [/\byukon\b/i, /\byt\b/i] }
 ];
 
+type ServiceRegion = {
+  province: string;
+  city?: string;
+  isFallback?: boolean;
+};
+
 function decodePricingKeyPart(value: string) {
   return decodeURIComponent(value);
 }
 
-function inferServiceRegion(zoneCode: string, pickupLocation?: string, destinationLocation?: string) {
-  const pickupParts = String(pickupLocation ?? "")
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const destinationParts = String(destinationLocation ?? "")
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const allParts = [...pickupParts, ...destinationParts];
-  const combined = allParts.join(", ");
-
+function findCanadianRegion(parts: string[]): ServiceRegion | null {
   for (const matcher of provinceMatchers) {
-    const provinceIndex = allParts.findIndex((part) => matcher.patterns.some((pattern) => pattern.test(part)));
+    const provinceIndex = parts.findIndex((part) => matcher.patterns.some((pattern) => pattern.test(part)));
     if (provinceIndex >= 0) {
-      const cityCandidate = allParts
+      const cityCandidate = parts
         .slice(Math.max(0, provinceIndex - 1), provinceIndex)
         .reverse()
         .find((part) => /^[A-Za-z][A-Za-z .'-]+$/.test(part) && !matcher.patterns.some((pattern) => pattern.test(part)));
@@ -54,11 +51,34 @@ function inferServiceRegion(zoneCode: string, pickupLocation?: string, destinati
     }
   }
 
-  if (/\bwinnipeg\b/i.test(combined) || zoneCode.startsWith("WPG-")) {
+  return null;
+}
+
+function inferServiceRegion(zoneCode: string, pickupLocation?: string, destinationLocation?: string): ServiceRegion {
+  const pickupParts = String(pickupLocation ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const destinationParts = String(destinationLocation ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const pickupRegion = findCanadianRegion(pickupParts);
+  if (pickupRegion) {
+    return pickupRegion;
+  }
+
+  const destinationRegion = findCanadianRegion(destinationParts);
+  if (!pickupParts.length && destinationRegion) {
+    return destinationRegion;
+  }
+
+  const pickupCombined = pickupParts.join(", ");
+  if (/\bwinnipeg\b/i.test(pickupCombined) || (!pickupCombined && zoneCode.startsWith("WPG-"))) {
     return { province: "Manitoba", city: "Winnipeg" };
   }
 
-  return { province: "Manitoba", city: undefined as string | undefined };
+  return { province: fallbackPricingLabel, city: undefined as string | undefined, isFallback: true };
 }
 
 export async function resolveBookingPricing(params: {
@@ -72,7 +92,8 @@ export async function resolveBookingPricing(params: {
     where: {
       OR: [
         { code: { startsWith: provincePricingPrefix } },
-        { code: { startsWith: cityPricingPrefix } }
+        { code: { startsWith: cityPricingPrefix } },
+        { code: { startsWith: fallbackPricingPrefix } }
       ]
     },
     select: {
@@ -83,10 +104,24 @@ export async function resolveBookingPricing(params: {
 
   let provinceFlatFee = 35;
   let provinceMinHours = 2;
+  let fallbackFlatFee = 35;
+  let fallbackMinHours = 2;
   let cityFlatFee: number | null = null;
   let cityMinHours: number | null = null;
 
   for (const setting of settings) {
+    if (setting.code.startsWith(fallbackPricingPrefix)) {
+      const [, kind] = setting.code.split("::");
+
+      if (kind === "FLAT_FEE") {
+        fallbackFlatFee = setting.value;
+      }
+
+      if (kind === "MIN_HOURS") {
+        fallbackMinHours = setting.value;
+      }
+    }
+
     if (setting.code.startsWith(provincePricingPrefix)) {
       const [, encodedProvince, kind] = setting.code.split("::");
       const province = decodePricingKeyPart(encodedProvince);
@@ -123,8 +158,8 @@ export async function resolveBookingPricing(params: {
     }
   }
 
-  const flatFee = cityFlatFee ?? provinceFlatFee;
-  const minHours = cityMinHours ?? provinceMinHours;
+  const flatFee = region.isFallback ? fallbackFlatFee : cityFlatFee ?? provinceFlatFee;
+  const minHours = region.isFallback ? fallbackMinHours : cityMinHours ?? provinceMinHours;
   const requestedHours = Math.max(1, Math.ceil(params.expectedDurationMinutes / 60));
   const billableHours = Math.max(requestedHours, minHours);
   const fareEstimate = Number((flatFee * billableHours).toFixed(2));
