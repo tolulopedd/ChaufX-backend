@@ -1,5 +1,5 @@
 import { AccountStatus, BookingStatus, PaymentStatus, TripStatus, type Prisma } from "@prisma/client";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
@@ -40,6 +40,12 @@ const settlementConfigPrefix = "SETTLEMENT::";
 const platformSharePercentCode = `${settlementConfigPrefix}PLATFORM_SHARE_PERCENT`;
 const fallbackFlatFeeCode = `${fallbackPricingPrefix}FLAT_FEE`;
 const fallbackMinHoursCode = `${fallbackPricingPrefix}MIN_HOURS`;
+
+function disableResponseCache(response: Response) {
+  response.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  response.set("Pragma", "no-cache");
+  response.set("Expires", "0");
+}
 
 function firstNameFromFullName(fullName: string) {
   return fullName.trim().split(/\s+/)[0] ?? fullName.trim();
@@ -1218,6 +1224,8 @@ adminRoutes.post(
 adminRoutes.get(
   "/admin/settings",
   asyncHandler(async (_request, response) => {
+    disableResponseCache(response);
+
     const [zones, pricing] = await Promise.all([
       prisma.serviceZone.findMany({
         where: { isActive: true }
@@ -1292,19 +1300,17 @@ adminRoutes.post(
         deleteFilters.push({ code: { startsWith: cityPricingPrefix } });
       }
 
-      if (input.fallbackPricing !== undefined) {
-        deleteFilters.push({ code: { startsWith: fallbackPricingPrefix } });
-      }
-
       if (input.settlementConfig !== undefined) {
         deleteFilters.push({ code: { startsWith: settlementConfigPrefix } });
       }
 
-      await tx.pricingSetting.deleteMany({
-        where: {
-          OR: deleteFilters
-        }
-      });
+      if (deleteFilters.length) {
+        await tx.pricingSetting.deleteMany({
+          where: {
+            OR: deleteFilters
+          }
+        });
+      }
 
       const provinceRows =
         input.provincePricing?.flatMap((item) => [
@@ -1349,28 +1355,39 @@ adminRoutes.post(
           ]
         : [];
 
-      const fallbackRows = input.fallbackPricing
-        ? [
-            {
-              code: fallbackFlatFeeCode,
-              name: "Fallback flat fee",
-              value: input.fallbackPricing.flatFee,
-              description: "Flat hourly fee when pickup pricing is outside configured Canada regions."
-            },
-            {
-              code: fallbackMinHoursCode,
-              name: "Fallback minimum booking hours",
-              value: input.fallbackPricing.minHours,
-              description: "Minimum booking hours when pickup pricing is outside configured Canada regions."
-            }
-          ]
-        : [];
-
-      const rows = [...provinceRows, ...cityRows, ...fallbackRows, ...settlementRows];
+      const rows = [...provinceRows, ...cityRows, ...settlementRows];
 
       if (rows.length) {
         await tx.pricingSetting.createMany({
           data: rows
+        });
+      }
+
+      if (input.fallbackPricing !== undefined) {
+        await tx.pricingSetting.upsert({
+          where: { code: fallbackFlatFeeCode },
+          create: {
+            code: fallbackFlatFeeCode,
+            name: "Fallback flat fee",
+            value: input.fallbackPricing.flatFee,
+            description: "Flat hourly fee when pickup pricing is outside configured Canada regions."
+          },
+          update: {
+            value: input.fallbackPricing.flatFee
+          }
+        });
+
+        await tx.pricingSetting.upsert({
+          where: { code: fallbackMinHoursCode },
+          create: {
+            code: fallbackMinHoursCode,
+            name: "Fallback minimum booking hours",
+            value: input.fallbackPricing.minHours,
+            description: "Minimum booking hours when pickup pricing is outside configured Canada regions."
+          },
+          update: {
+            value: input.fallbackPricing.minHours
+          }
         });
       }
     });
@@ -1381,6 +1398,8 @@ adminRoutes.post(
       }),
       prisma.pricingSetting.findMany()
     ]);
+
+    disableResponseCache(response);
 
     response.json({
       zones,
