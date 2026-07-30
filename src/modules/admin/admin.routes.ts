@@ -1240,100 +1240,131 @@ adminRoutes.post(
   "/admin/settings/pricing",
   asyncHandler(async (request, response) => {
     const schema = z.object({
-      provincePricing: z.array(
-        z.object({
-          province: z.string().min(2),
-          flatFee: z.coerce.number().min(0),
-          minHours: z.coerce.number().min(1)
-        })
-      ),
-      cityPricing: z.array(
-        z.object({
-          province: z.string().min(2),
-          city: z.string().min(2),
-          flatFee: z.coerce.number().min(0),
-          minHours: z.coerce.number().min(1)
-        })
-      ),
+      provincePricing: z
+        .array(
+          z.object({
+            province: z.string().min(2),
+            flatFee: z.coerce.number().min(0),
+            minHours: z.coerce.number().min(1)
+          })
+        )
+        .optional(),
+      cityPricing: z
+        .array(
+          z.object({
+            province: z.string().min(2),
+            city: z.string().min(2),
+            flatFee: z.coerce.number().min(0),
+            minHours: z.coerce.number().min(1)
+          })
+        )
+        .optional(),
       fallbackPricing: z
         .object({
           flatFee: z.coerce.number().min(0),
           minHours: z.coerce.number().min(1)
         })
+        .optional(),
+      settlementConfig: z
+        .object({
+          platformSharePercent: z.coerce.number().min(0).max(100)
+        })
         .optional()
-        .default({ flatFee: 35, minHours: 2 }),
-      settlementConfig: z.object({
-        platformSharePercent: z.coerce.number().min(0).max(100)
-      })
-    });
+    }).refine(
+      (value) =>
+        value.provincePricing !== undefined ||
+        value.cityPricing !== undefined ||
+        value.fallbackPricing !== undefined ||
+        value.settlementConfig !== undefined,
+      { message: "At least one pricing setting must be provided." }
+    );
 
     const input = schema.parse(request.body);
 
     await prisma.$transaction(async (tx) => {
+      const deleteFilters: Prisma.PricingSettingWhereInput[] = [];
+
+      if (input.provincePricing !== undefined) {
+        deleteFilters.push({ code: { startsWith: provincePricingPrefix } });
+      }
+
+      if (input.cityPricing !== undefined) {
+        deleteFilters.push({ code: { startsWith: cityPricingPrefix } });
+      }
+
+      if (input.fallbackPricing !== undefined) {
+        deleteFilters.push({ code: { startsWith: fallbackPricingPrefix } });
+      }
+
+      if (input.settlementConfig !== undefined) {
+        deleteFilters.push({ code: { startsWith: settlementConfigPrefix } });
+      }
+
       await tx.pricingSetting.deleteMany({
         where: {
-          OR: [
-            { code: { startsWith: provincePricingPrefix } },
-            { code: { startsWith: cityPricingPrefix } },
-            { code: { startsWith: fallbackPricingPrefix } },
-            { code: { startsWith: settlementConfigPrefix } }
-          ]
+          OR: deleteFilters
         }
       });
 
-      const provinceRows = input.provincePricing.flatMap((item) => [
-        {
-          code: buildProvincePricingCode(item.province, "FLAT_FEE"),
-          name: `${item.province} flat fee`,
-          value: item.flatFee,
-          description: `Flat hourly fee for ${item.province}`
-        },
-        {
-          code: buildProvincePricingCode(item.province, "MIN_HOURS"),
-          name: `${item.province} minimum booking hours`,
-          value: item.minHours,
-          description: `Minimum booking hours for ${item.province}`
-        }
-      ]);
+      const provinceRows =
+        input.provincePricing?.flatMap((item) => [
+          {
+            code: buildProvincePricingCode(item.province, "FLAT_FEE"),
+            name: `${item.province} flat fee`,
+            value: item.flatFee,
+            description: `Flat hourly fee for ${item.province}`
+          },
+          {
+            code: buildProvincePricingCode(item.province, "MIN_HOURS"),
+            name: `${item.province} minimum booking hours`,
+            value: item.minHours,
+            description: `Minimum booking hours for ${item.province}`
+          }
+        ]) ?? [];
 
-      const cityRows = input.cityPricing.flatMap((item) => [
-        {
-          code: buildCityPricingCode(item.province, item.city, "FLAT_FEE"),
-          name: `${item.city}, ${item.province} flat fee`,
-          value: item.flatFee,
-          description: `City override flat fee for ${item.city}, ${item.province}`
-        },
-        {
-          code: buildCityPricingCode(item.province, item.city, "MIN_HOURS"),
-          name: `${item.city}, ${item.province} minimum booking hours`,
-          value: item.minHours,
-          description: `City override minimum booking hours for ${item.city}, ${item.province}`
-        }
-      ]);
+      const cityRows =
+        input.cityPricing?.flatMap((item) => [
+          {
+            code: buildCityPricingCode(item.province, item.city, "FLAT_FEE"),
+            name: `${item.city}, ${item.province} flat fee`,
+            value: item.flatFee,
+            description: `City override flat fee for ${item.city}, ${item.province}`
+          },
+          {
+            code: buildCityPricingCode(item.province, item.city, "MIN_HOURS"),
+            name: `${item.city}, ${item.province} minimum booking hours`,
+            value: item.minHours,
+            description: `City override minimum booking hours for ${item.city}, ${item.province}`
+          }
+        ]) ?? [];
 
-      const settlementRows = [
-        {
-          code: platformSharePercentCode,
-          name: "Platform share percent",
-          value: input.settlementConfig.platformSharePercent,
-          description: "Platform revenue share percentage applied to completed paid trips."
-        }
-      ];
+      const settlementRows = input.settlementConfig
+        ? [
+            {
+              code: platformSharePercentCode,
+              name: "Platform share percent",
+              value: input.settlementConfig.platformSharePercent,
+              description: "Platform revenue share percentage applied to completed paid trips."
+            }
+          ]
+        : [];
 
-      const fallbackRows = [
-        {
-          code: fallbackFlatFeeCode,
-          name: "Fallback flat fee",
-          value: input.fallbackPricing.flatFee,
-          description: "Flat hourly fee when pickup pricing is outside configured Canada regions."
-        },
-        {
-          code: fallbackMinHoursCode,
-          name: "Fallback minimum booking hours",
-          value: input.fallbackPricing.minHours,
-          description: "Minimum booking hours when pickup pricing is outside configured Canada regions."
-        }
-      ];
+      const fallbackRows = input.fallbackPricing
+        ? [
+            {
+              code: fallbackFlatFeeCode,
+              name: "Fallback flat fee",
+              value: input.fallbackPricing.flatFee,
+              description: "Flat hourly fee when pickup pricing is outside configured Canada regions."
+            },
+            {
+              code: fallbackMinHoursCode,
+              name: "Fallback minimum booking hours",
+              value: input.fallbackPricing.minHours,
+              description: "Minimum booking hours when pickup pricing is outside configured Canada regions."
+            }
+          ]
+        : [];
 
       const rows = [...provinceRows, ...cityRows, ...fallbackRows, ...settlementRows];
 
