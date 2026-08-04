@@ -55,6 +55,39 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum MembershipTier {
+  BASIC
+  PLUS
+  CONCIERGE
+  CORPORATE
+}
+
+enum MembershipStatus {
+  ACTIVE
+  AWAITING_PAYMENT
+  CANCELLED
+  EXPIRED
+}
+
+enum MembershipBillingCycle {
+  NONE
+  MONTHLY
+  ANNUAL
+  CUSTOM
+}
+
+enum MembershipPaymentMethod {
+  STRIPE
+  INTERAC
+}
+
+enum MembershipPaymentStatus {
+  PENDING
+  RECORDED
+  FAILED
+  CANCELLED
+}
+
 enum DriverSettlementStatus {
   PENDING
   PAID
@@ -108,16 +141,22 @@ enum DocumentType {
 }
 
 model User {
-  id              String           @id @default(uuid())
-  fullName        String
-  email           String           @unique
-  phone           String?
-  passwordHash    String
-  role            UserRole
-  status          AccountStatus    @default(ACTIVE)
-  emailVerifiedAt DateTime?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id                     String                 @id @default(uuid())
+  fullName               String
+  email                  String                 @unique
+  phone                  String?
+  passwordHash           String
+  role                   UserRole
+  status                 AccountStatus          @default(ACTIVE)
+  emailVerifiedAt        DateTime?
+  membershipTier         MembershipTier         @default(BASIC)
+  membershipStatus       MembershipStatus       @default(ACTIVE)
+  membershipBillingCycle MembershipBillingCycle @default(NONE)
+  membershipHourlyRate   Float?
+  membershipActivatedAt  DateTime?
+  membershipExpiresAt    DateTime?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
 
   customerProfile CustomerProfile?
   driver          Driver?
@@ -131,6 +170,30 @@ model User {
   ratingsReceived Rating[]         @relation("RatingReviewed")
   auditLogs       AuditLog[]       @relation("AuditActor")
   reviewedApplications DriverApplication[] @relation("ApplicationReviewer")
+  membershipPayments MembershipPayment[]
+}
+
+model MembershipPayment {
+  id                String                  @id @default(uuid())
+  userId            String
+  tier              MembershipTier
+  billingCycle      MembershipBillingCycle
+  method            MembershipPaymentMethod
+  status            MembershipPaymentStatus @default(PENDING)
+  amount            Float
+  currency          String                  @default("CAD")
+  invoiceNumber     String                  @unique
+  stripeSessionId   String?                 @unique
+  interacEmail      String?
+  recordedAt        DateTime?
+  notes             String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([tier, status])
 }
 
 model PushDevice {

@@ -3,6 +3,7 @@ import { appConfig, buildActivationWindow, isTripWindowActive } from "../../lib/
 import { AppError } from "../../common/AppError.js";
 import { prisma } from "../../lib/prisma.js";
 import { notifyUser, notifyUsers } from "../../lib/notifications.js";
+import { getActiveMembershipHourlyRate } from "../memberships/membership.service.js";
 
 const provincePricingPrefix = "PROVINCE::";
 const cityPricingPrefix = "CITY::";
@@ -84,6 +85,7 @@ function inferServiceRegion(zoneCode: string, pickupLocation?: string, destinati
 export async function resolveBookingPricing(params: {
   zoneCode: string;
   expectedDurationMinutes: number;
+  customerUserId?: string;
   pickupLocation?: string;
   destinationLocation?: string;
 }) {
@@ -158,8 +160,28 @@ export async function resolveBookingPricing(params: {
     }
   }
 
-  const flatFee = region.isFallback ? fallbackFlatFee : cityFlatFee ?? provinceFlatFee;
+  const regionalFlatFee = region.isFallback ? fallbackFlatFee : cityFlatFee ?? provinceFlatFee;
   const minHours = region.isFallback ? fallbackMinHours : cityMinHours ?? provinceMinHours;
+  let membershipFlatFee: number | null = null;
+  let membershipTier: string | null = null;
+
+  if (params.customerUserId) {
+    const customerUser = await prisma.user.findUnique({
+      where: { id: params.customerUserId },
+      select: {
+        membershipTier: true,
+        membershipStatus: true,
+        membershipHourlyRate: true
+      }
+    });
+
+    if (customerUser) {
+      membershipTier = customerUser.membershipTier;
+      membershipFlatFee = getActiveMembershipHourlyRate(customerUser);
+    }
+  }
+
+  const flatFee = membershipFlatFee ?? regionalFlatFee;
   const requestedHours = Math.max(1, Math.ceil(params.expectedDurationMinutes / 60));
   const billableHours = Math.max(requestedHours, minHours);
   const fareEstimate = Number((flatFee * billableHours).toFixed(2));
@@ -168,6 +190,9 @@ export async function resolveBookingPricing(params: {
     province: region.province,
     city: region.city,
     flatFee,
+    baseFlatFee: regionalFlatFee,
+    membershipTier,
+    membershipApplied: membershipFlatFee !== null,
     minHours,
     requestedHours,
     billableHours,
@@ -285,6 +310,7 @@ export function mapStateForBooking(booking: {
 
 export async function createBookingRecord(input: {
   customerId: string;
+  customerUserId: string;
   vehicleId?: string;
   requestType: "NOW" | "LATER";
   pickupLocation: string;
@@ -303,6 +329,7 @@ export async function createBookingRecord(input: {
   const pricing = await resolveBookingPricing({
     zoneCode: input.zoneCode,
     expectedDurationMinutes: input.expectedDurationMinutes,
+    customerUserId: input.customerUserId,
     pickupLocation: input.pickupLocation,
     destinationLocation: input.destinationLocation
   });

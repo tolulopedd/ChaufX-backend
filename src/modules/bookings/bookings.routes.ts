@@ -52,9 +52,11 @@ bookingsRoutes.post(
     const pricing = await resolveBookingPricing({
       zoneCode: input.zoneCode,
       expectedDurationMinutes: input.expectedDurationMinutes,
+      customerUserId: request.auth!.userId,
       pickupLocation: input.pickupLocation,
       destinationLocation: input.destinationLocation
     });
+    const pricingRateLabel = pricing.membershipApplied ? "membership rate" : "rate";
 
     response.json({
       fareEstimate: pricing.fareEstimate,
@@ -66,9 +68,11 @@ bookingsRoutes.post(
       billableHours: pricing.billableHours,
       pricingProvince: pricing.province,
       pricingCity: pricing.city,
+      pricingMembershipTier: pricing.membershipTier,
+      membershipApplied: pricing.membershipApplied,
       activationWindowStartAt: activationWindow.startsAt.toISOString(),
       activationWindowEndAt: activationWindow.endsAt.toISOString(),
-      pricingNote: `All rates are billed in CAD. ${pricing.billableHours} hour${pricing.billableHours === 1 ? "" : "s"} billed at $${pricing.flatFee}/hour. No surge pricing is applied after booking confirmation.`
+      pricingNote: `All rates are billed in CAD. ${pricing.billableHours} hour${pricing.billableHours === 1 ? "" : "s"} billed at $${pricing.flatFee}/hour ${pricingRateLabel}. No surge pricing is applied after booking confirmation.`
     });
   })
 );
@@ -85,6 +89,7 @@ bookingsRoutes.post(
 
     const booking = await createBookingRecord({
       customerId: customer.id,
+      customerUserId: request.auth!.userId,
       ...input
     });
 

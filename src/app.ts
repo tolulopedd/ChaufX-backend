@@ -15,6 +15,11 @@ import {
   paymentCheckoutCompleteHandler,
   paymentsRoutes
 } from "./modules/payments/payments.routes.js";
+import {
+  membershipCheckoutCancelHandler,
+  membershipCheckoutCompleteHandler,
+  membershipsRoutes
+} from "./modules/memberships/memberships.routes.js";
 import { notificationsRoutes } from "./modules/notifications/notifications.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
 import { contactMessageRoutes } from "./modules/contact-messages/contact-messages.routes.js";
@@ -35,6 +40,8 @@ export function createApp() {
 
   app.get("/api/payments/checkout/complete", paymentCheckoutCompleteHandler);
   app.get("/api/payments/checkout/cancel", paymentCheckoutCancelHandler);
+  app.get("/api/memberships/checkout/complete", membershipCheckoutCompleteHandler);
+  app.get("/api/memberships/checkout/cancel", membershipCheckoutCancelHandler);
   app.use("/api", healthRoutes);
   app.use("/api", authRoutes);
   app.use("/api", driverOnboardingRoutes);
@@ -44,6 +51,7 @@ export function createApp() {
   app.use("/api", tripsRoutes);
   app.use("/api", locationsRoutes);
   app.use("/api", paymentsRoutes);
+  app.use("/api", membershipsRoutes);
   app.use("/api", notificationsRoutes);
   app.use("/api", adminRoutes);
   app.use("/api", contactMessageRoutes);
