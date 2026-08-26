@@ -22,6 +22,7 @@ import {
 } from "./modules/memberships/memberships.routes.js";
 import { notificationsRoutes } from "./modules/notifications/notifications.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
+import { blogRoutes } from "./modules/blog/blog.routes.js";
 import { contactMessageRoutes } from "./modules/contact-messages/contact-messages.routes.js";
 import { errorMiddleware } from "./middleware/error.js";
 
@@ -54,6 +55,7 @@ export function createApp() {
   app.use("/api", membershipsRoutes);
   app.use("/api", notificationsRoutes);
   app.use("/api", adminRoutes);
+  app.use("/api", blogRoutes);
   app.use("/api", contactMessageRoutes);
 
   app.use((_request, response) => {

@@ -11,6 +11,12 @@ enum UserRole {
   CUSTOMER
   DRIVER
   ADMIN
+  MARKETING
+}
+
+enum BlogPostStatus {
+  DRAFT
+  PUBLISHED
 }
 
 enum AccountStatus {
@@ -171,6 +177,26 @@ model User {
   auditLogs       AuditLog[]       @relation("AuditActor")
   reviewedApplications DriverApplication[] @relation("ApplicationReviewer")
   membershipPayments MembershipPayment[]
+  blogPostsAuthored  BlogPost[]
+}
+
+model BlogPost {
+  id            String         @id @default(uuid())
+  title         String
+  slug          String         @unique
+  summary       String
+  body          String
+  coverImageUrl String?
+  status        BlogPostStatus @default(DRAFT)
+  publishedAt   DateTime?
+  authorId      String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([status, publishedAt])
+  @@index([authorId])
 }
 
 model MembershipPayment {
