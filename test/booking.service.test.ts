@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { haversineDistanceKm, mapStateForBooking, windowsOverlap } from "../src/modules/bookings/booking.service.js";
+import {
+  findCanadianRegionByCoordinate,
+  haversineDistanceKm,
+  inferServiceRegion,
+  mapStateForBooking,
+  windowsOverlap
+} from "../src/modules/bookings/booking.service.js";
 
 describe("booking.service", () => {
   it("detects overlapping trip windows", () => {
@@ -31,5 +37,23 @@ describe("booking.service", () => {
 
     expect(distance).toBeGreaterThan(1);
     expect(distance).toBeLessThan(2);
+  });
+
+  it("detects Winnipeg from pickup coordinates when the address is unavailable", () => {
+    const region = inferServiceRegion("WPG-CENTRAL", "", "", 49.8951, -97.1384);
+
+    expect(region).toEqual({
+      province: "Manitoba",
+      city: "Winnipeg"
+    });
+  });
+
+  it("maps coordinates outside Winnipeg to the matching Canadian province", () => {
+    const region = findCanadianRegionByCoordinate(51.0447, -114.0719);
+
+    expect(region).toEqual({
+      province: "Alberta",
+      city: undefined
+    });
   });
 });

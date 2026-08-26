@@ -1,4 +1,14 @@
-import { AccountStatus, BookingStatus, PaymentStatus, TripStatus, type Prisma } from "@prisma/client";
+import {
+  AccountStatus,
+  BookingStatus,
+  MembershipBillingCycle,
+  MembershipStatus,
+  MembershipTier,
+  PaymentStatus,
+  TripStatus,
+  UserRole,
+  type Prisma
+} from "@prisma/client";
 import { Router, type Response } from "express";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
@@ -12,6 +22,7 @@ import { AppError } from "../../common/AppError.js";
 import { createDocumentAccessUrl, isS3DocumentReference } from "../../lib/document-storage.js";
 import { sendTransactionalEmail } from "../../lib/email.js";
 import { env } from "../../config/env.js";
+import { hashPassword } from "../../lib/auth.js";
 
 export const adminRoutes = Router();
 
@@ -49,6 +60,42 @@ function disableResponseCache(response: Response) {
 
 function firstNameFromFullName(fullName: string) {
   return fullName.trim().split(/\s+/)[0] ?? fullName.trim();
+}
+
+function buildDriverAvailabilitySummary(rawAvailabilitySchedule?: string | null) {
+  const rawValue = String(rawAvailabilitySchedule ?? "").trim();
+  if (!rawValue) {
+    return null;
+  }
+
+  const details = Object.fromEntries(
+    rawValue
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf(":");
+        if (separator === -1) {
+          return [line, ""];
+        }
+
+        return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+      })
+  ) as Record<string, string>;
+
+  const preferredWorkingHours = details["Preferred working hours"];
+  const weeklyAvailability = details["Availability per week"];
+
+  if (!preferredWorkingHours && !weeklyAvailability) {
+    return rawValue.length <= 240 ? rawValue : null;
+  }
+
+  return [
+    preferredWorkingHours ? `Preferred working hours: ${preferredWorkingHours}` : null,
+    weeklyAvailability ? `Availability per week: ${weeklyAvailability}` : null
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildDriverApplicationStatusEmail(params: {
@@ -329,6 +376,7 @@ adminRoutes.post(
     const additionalInfo = input.decision === "additional_info";
 
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const sanitizedAvailabilitySchedule = buildDriverAvailabilitySummary(application.availabilitySchedule);
       const updatedApplication = await tx.driverApplication.update({
         where: { id: application.id },
         data: {
@@ -358,7 +406,7 @@ adminRoutes.post(
             yearsOfExperience: application.yearsOfExperience,
             emergencyContact: application.emergencyContact,
             serviceAreas: application.preferredServiceAreas,
-            availabilitySchedule: application.availabilitySchedule,
+            availabilitySchedule: sanitizedAvailabilitySchedule,
             approvedAt: new Date()
           },
           update: {
@@ -367,7 +415,7 @@ adminRoutes.post(
             yearsOfExperience: application.yearsOfExperience,
             emergencyContact: application.emergencyContact,
             serviceAreas: application.preferredServiceAreas,
-            availabilitySchedule: application.availabilitySchedule,
+            availabilitySchedule: sanitizedAvailabilitySchedule,
             approvedAt: new Date()
           }
         });
@@ -516,6 +564,434 @@ adminRoutes.get(
     });
 
     response.json(drivers);
+  })
+);
+
+adminRoutes.get(
+  "/admin/users",
+  asyncHandler(async (_request, response) => {
+    const users = await prisma.user.findMany({
+      include: {
+        customerProfile: {
+          include: {
+            vehicles: true,
+            bookings: {
+              orderBy: {
+                scheduledStartAt: "desc"
+              },
+              take: 5
+            }
+          }
+        },
+        driver: {
+          include: {
+            application: true,
+            bookings: {
+              where: {
+                status: {
+                  in: ["ACCEPTED", "ACTIVE"]
+                }
+              }
+            }
+          }
+        }
+      },
+      orderBy: {
+        updatedAt: "desc"
+      }
+    });
+
+    response.json(users);
+  })
+);
+
+adminRoutes.post(
+  "/admin/users",
+  asyncHandler(async (request, response) => {
+    const schema = z.object({
+      fullName: z.string().trim().min(2).max(120),
+      email: z.string().trim().email(),
+      phone: z
+        .string()
+        .trim()
+        .max(40)
+        .optional()
+        .transform((value) => value || undefined),
+      password: z.string().min(8).max(120),
+      role: z.nativeEnum(UserRole),
+      status: z.nativeEnum(AccountStatus).default(AccountStatus.ACTIVE)
+    });
+    const input = schema.parse(request.body);
+
+    const existingUser = await prisma.user.findUnique({
+      where: {
+        email: input.email
+      },
+      select: {
+        id: true
+      }
+    });
+
+    if (existingUser) {
+      throw new AppError("A user with this email already exists.", 409, "USER_EMAIL_TAKEN");
+    }
+
+    const createdUser = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          fullName: input.fullName,
+          email: input.email,
+          phone: input.phone ?? null,
+          passwordHash: await hashPassword(input.password),
+          role: input.role,
+          status: input.status,
+          customerProfile:
+            input.role === UserRole.CUSTOMER
+              ? {
+                  create: {
+                    savedAddresses: []
+                  }
+                }
+              : undefined,
+          driver:
+            input.role === UserRole.DRIVER
+              ? {
+                  create: {
+                    licenseNumber: "PENDING",
+                    yearsOfExperience: 0,
+                    emergencyContact: "Pending",
+                    serviceAreas: ["Canada"],
+                    availabilityStatus: false,
+                    availabilitySchedule: null
+                  }
+                }
+              : undefined,
+          adminUser:
+            input.role === UserRole.ADMIN || input.role === UserRole.MARKETING
+              ? {
+                  create: {
+                    permissions: []
+                  }
+                }
+              : undefined
+        }
+      });
+
+      return tx.user.findUniqueOrThrow({
+        where: { id: user.id },
+        include: {
+          customerProfile: {
+            include: {
+              vehicles: true,
+              bookings: {
+                orderBy: {
+                  scheduledStartAt: "desc"
+                },
+                take: 5
+              }
+            }
+          },
+          driver: {
+            include: {
+              application: true,
+              bookings: {
+                where: {
+                  status: {
+                    in: ["ACCEPTED", "ACTIVE"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+    });
+
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "ADMIN_USER_CREATED",
+      entityType: "User",
+      entityId: createdUser.id,
+      details: {
+        email: createdUser.email,
+        role: createdUser.role,
+        status: createdUser.status
+      }
+    });
+
+    response.status(201).json(createdUser);
+  })
+);
+
+adminRoutes.patch(
+  "/admin/users/:userId",
+  asyncHandler(async (request, response) => {
+    const userId = paramValue(request.params.userId);
+    const schema = z.object({
+      fullName: z.string().trim().min(2).max(120),
+      email: z.string().email(),
+      phone: z
+        .string()
+        .trim()
+        .max(40)
+        .optional()
+        .transform((value) => value || undefined),
+      role: z.nativeEnum(UserRole),
+      status: z.nativeEnum(AccountStatus),
+      membershipTier: z.nativeEnum(MembershipTier).optional(),
+      membershipStatus: z.nativeEnum(MembershipStatus).optional(),
+      membershipBillingCycle: z.nativeEnum(MembershipBillingCycle).optional(),
+      membershipHourlyRate: z.number().min(0).max(500).nullable().optional(),
+      savedAddresses: z.array(z.string().trim().min(3).max(240)).optional(),
+      driver: z
+        .object({
+          licenseNumber: z.string().trim().min(2).max(80),
+          yearsOfExperience: z.number().int().min(0).max(60),
+          emergencyContact: z.string().trim().min(2).max(120),
+          serviceAreas: z.array(z.string().trim().min(2).max(80)).min(1).max(12),
+          availabilitySchedule: z
+            .string()
+            .trim()
+            .max(240)
+            .optional()
+            .transform((value) => value || null),
+          availabilityStatus: z.boolean()
+        })
+        .optional()
+    });
+    const input = schema.parse(request.body);
+
+    const existingUser = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        customerProfile: true,
+        driver: true,
+        adminUser: true
+      }
+    });
+
+    if (!existingUser) {
+      throw new AppError("User not found", 404, "USER_NOT_FOUND");
+    }
+
+    const updatedUser = await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          fullName: input.fullName,
+          email: input.email,
+          phone: input.phone ?? null,
+          role: input.role,
+          status: input.status,
+          membershipTier: input.membershipTier ?? existingUser.membershipTier,
+          membershipStatus: input.membershipStatus ?? existingUser.membershipStatus,
+          membershipBillingCycle: input.membershipBillingCycle ?? existingUser.membershipBillingCycle,
+          membershipHourlyRate:
+            input.membershipHourlyRate === undefined ? existingUser.membershipHourlyRate : input.membershipHourlyRate
+        }
+      });
+
+      if (input.role === UserRole.CUSTOMER && !existingUser.customerProfile) {
+        await tx.customerProfile.create({
+          data: {
+            userId,
+            savedAddresses: input.savedAddresses ?? []
+          }
+        });
+      }
+
+      if (existingUser.customerProfile && input.savedAddresses) {
+        await tx.customerProfile.update({
+          where: {
+            userId
+          },
+          data: {
+            savedAddresses: input.savedAddresses
+          }
+        });
+      }
+
+      if ((input.role === UserRole.ADMIN || input.role === UserRole.MARKETING) && !existingUser.adminUser) {
+        await tx.adminUser.create({
+          data: {
+            userId,
+            permissions: []
+          }
+        });
+      }
+
+      if (input.role === UserRole.DRIVER && !existingUser.driver) {
+        await tx.driver.create({
+          data: {
+            userId,
+            licenseNumber: input.driver?.licenseNumber ?? "PENDING",
+            yearsOfExperience: input.driver?.yearsOfExperience ?? 0,
+            emergencyContact: input.driver?.emergencyContact ?? "Pending",
+            serviceAreas: input.driver?.serviceAreas?.length ? input.driver.serviceAreas : ["Canada"],
+            availabilitySchedule: input.driver?.availabilitySchedule ?? null,
+            availabilityStatus: input.driver?.availabilityStatus ?? false
+          }
+        });
+      }
+
+      if (existingUser.driver && input.driver) {
+        await tx.driver.update({
+          where: {
+            userId
+          },
+          data: {
+            licenseNumber: input.driver.licenseNumber,
+            yearsOfExperience: input.driver.yearsOfExperience,
+            emergencyContact: input.driver.emergencyContact,
+            serviceAreas: input.driver.serviceAreas,
+            availabilitySchedule: input.driver.availabilitySchedule,
+            availabilityStatus: input.driver.availabilityStatus
+          }
+        });
+      }
+
+      return tx.user.findUniqueOrThrow({
+        where: { id: userId },
+        include: {
+          customerProfile: {
+            include: {
+              vehicles: true,
+              bookings: {
+                orderBy: {
+                  scheduledStartAt: "desc"
+                },
+                take: 5
+              }
+            }
+          },
+          driver: {
+            include: {
+              application: true,
+              bookings: {
+                where: {
+                  status: {
+                    in: ["ACCEPTED", "ACTIVE"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+    });
+
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "ADMIN_USER_UPDATED",
+      entityType: "User",
+      entityId: userId,
+      details: {
+        email: updatedUser.email,
+        role: updatedUser.role,
+        status: updatedUser.status
+      }
+    });
+
+    response.json(updatedUser);
+  })
+);
+
+adminRoutes.delete(
+  "/admin/users/:userId",
+  asyncHandler(async (request, response) => {
+    const userId = paramValue(request.params.userId);
+
+    if (request.auth!.userId === userId) {
+      throw new AppError("You cannot delete your own admin account.", 400, "SELF_DELETE_BLOCKED");
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        role: true
+      }
+    });
+
+    if (!existingUser) {
+      throw new AppError("User not found", 404, "USER_NOT_FOUND");
+    }
+
+    await prisma.user.delete({
+      where: {
+        id: userId
+      }
+    });
+
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "ADMIN_USER_DELETED",
+      entityType: "User",
+      entityId: existingUser.id,
+      details: {
+        email: existingUser.email,
+        role: existingUser.role
+      }
+    });
+
+    response.status(204).send();
+  })
+);
+
+adminRoutes.post(
+  "/admin/users/:userId/password",
+  asyncHandler(async (request, response) => {
+    const userId = paramValue(request.params.userId);
+    const schema = z.object({
+      newPassword: z.string().min(8).max(120)
+    });
+    const { newPassword } = schema.parse(request.body);
+
+    const existingUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        role: true
+      }
+    });
+
+    if (!existingUser) {
+      throw new AppError("User not found", 404, "USER_NOT_FOUND");
+    }
+
+    if (existingUser.role !== UserRole.ADMIN && existingUser.role !== UserRole.MARKETING) {
+      throw new AppError(
+        "Password resets from admin are limited to admin and marketing users.",
+        400,
+        "PASSWORD_RESET_ROLE_NOT_ALLOWED"
+      );
+    }
+
+    await prisma.user.update({
+      where: {
+        id: userId
+      },
+      data: {
+        passwordHash: await hashPassword(newPassword)
+      }
+    });
+
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "ADMIN_USER_PASSWORD_RESET",
+      entityType: "User",
+      entityId: existingUser.id,
+      details: {
+        email: existingUser.email,
+        role: existingUser.role
+      }
+    });
+
+    response.json({
+      success: true
+    });
   })
 );
 

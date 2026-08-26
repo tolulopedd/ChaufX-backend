@@ -33,7 +33,8 @@ const registerSchema = z.object({
 
 const loginSchema = z.object({
   email: z.email(),
-  password: z.string().min(8)
+  password: z.string().min(8),
+  expectedApp: z.enum(["customer", "driver"]).optional()
 });
 
 const refreshSchema = z.object({

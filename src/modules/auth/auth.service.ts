@@ -129,7 +129,7 @@ export async function createVerifiedCustomer(input: {
   });
 }
 
-export async function login(input: { email: string; password: string }) {
+export async function login(input: { email: string; password: string; expectedApp?: "customer" | "driver" }) {
   const user = await prisma.user.findUnique({
     where: { email: input.email },
     include: {
@@ -153,6 +153,22 @@ export async function login(input: { email: string; password: string }) {
 
   if (user.role === UserRole.DRIVER && !user.driver?.approvedAt) {
     throw new AppError("Driver access remains locked until admin approval", 403, "DRIVER_NOT_APPROVED");
+  }
+
+  if (input.expectedApp === "customer" && user.role !== UserRole.CUSTOMER) {
+    throw new AppError(
+      "This account is registered for the driver app. Sign in through the ChaufX Driver app or use a customer account here.",
+      403,
+      "WRONG_APP_FOR_ROLE"
+    );
+  }
+
+  if (input.expectedApp === "driver" && user.role !== UserRole.DRIVER) {
+    throw new AppError(
+      "This account is registered for the customer app. Sign in through the ChaufX Customer app or use an approved driver account here.",
+      403,
+      "WRONG_APP_FOR_ROLE"
+    );
   }
 
   return buildSession(user);

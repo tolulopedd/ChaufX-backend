@@ -36,7 +36,9 @@ const estimateBookingSchema = z.object({
   expectedDurationMinutes: z.coerce.number().int().min(60),
   zoneCode: z.string().min(3),
   pickupLocation: z.string().min(3).optional(),
-  destinationLocation: z.string().min(3).optional()
+  destinationLocation: z.string().min(3).optional(),
+  pickupLat: z.coerce.number().min(-90).max(90).optional(),
+  pickupLng: z.coerce.number().min(-180).max(180).optional()
 });
 
 export const bookingsRoutes = Router();
@@ -54,7 +56,9 @@ bookingsRoutes.post(
       expectedDurationMinutes: input.expectedDurationMinutes,
       customerUserId: request.auth!.userId,
       pickupLocation: input.pickupLocation,
-      destinationLocation: input.destinationLocation
+      destinationLocation: input.destinationLocation,
+      pickupLat: input.pickupLat,
+      pickupLng: input.pickupLng
     });
     const pricingRateLabel = pricing.membershipApplied ? "membership rate" : "rate";
 
@@ -133,7 +137,24 @@ bookingsRoutes.get(
           },
           payment: true,
           rating: true,
-          trip: true
+          trip: true,
+          dispatches: {
+            include: {
+              driver: {
+                include: {
+                  user: true
+                }
+              }
+            },
+            orderBy: [
+              {
+                distanceKm: "asc"
+              },
+              {
+                notifiedAt: "desc"
+              }
+            ]
+          }
         },
         orderBy: {
           scheduledStartAt: "desc"

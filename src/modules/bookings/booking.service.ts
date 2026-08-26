@@ -32,6 +32,77 @@ type ServiceRegion = {
   isFallback?: boolean;
 };
 
+type CoordinateRegion = {
+  province: string;
+  city?: string;
+  bounds: {
+    minLat: number;
+    maxLat: number;
+    minLng: number;
+    maxLng: number;
+  };
+};
+
+const coordinateRegions: CoordinateRegion[] = [
+  {
+    province: "Manitoba",
+    city: "Winnipeg",
+    bounds: { minLat: 49.6, maxLat: 50.1, minLng: -97.45, maxLng: -96.95 }
+  },
+  {
+    province: "Alberta",
+    bounds: { minLat: 48.9, maxLat: 60.1, minLng: -120.1, maxLng: -109.9 }
+  },
+  {
+    province: "British Columbia",
+    bounds: { minLat: 48.2, maxLat: 60.1, minLng: -139.1, maxLng: -114.0 }
+  },
+  {
+    province: "Saskatchewan",
+    bounds: { minLat: 49.0, maxLat: 60.1, minLng: -110.1, maxLng: -101.2 }
+  },
+  {
+    province: "Manitoba",
+    bounds: { minLat: 48.9, maxLat: 60.1, minLng: -102.1, maxLng: -88.8 }
+  },
+  {
+    province: "Ontario",
+    bounds: { minLat: 41.5, maxLat: 56.9, minLng: -95.3, maxLng: -74.0 }
+  },
+  {
+    province: "Quebec",
+    bounds: { minLat: 45.0, maxLat: 62.0, minLng: -79.9, maxLng: -57.0 }
+  },
+  {
+    province: "New Brunswick",
+    bounds: { minLat: 44.5, maxLat: 48.2, minLng: -69.2, maxLng: -63.8 }
+  },
+  {
+    province: "Nova Scotia",
+    bounds: { minLat: 43.3, maxLat: 47.1, minLng: -66.6, maxLng: -59.5 }
+  },
+  {
+    province: "Prince Edward Island",
+    bounds: { minLat: 45.9, maxLat: 47.2, minLng: -64.6, maxLng: -61.8 }
+  },
+  {
+    province: "Newfoundland and Labrador",
+    bounds: { minLat: 46.5, maxLat: 60.8, minLng: -67.9, maxLng: -52.5 }
+  },
+  {
+    province: "Yukon",
+    bounds: { minLat: 59.9, maxLat: 69.8, minLng: -141.1, maxLng: -123.7 }
+  },
+  {
+    province: "Northwest Territories",
+    bounds: { minLat: 59.8, maxLat: 78.9, minLng: -136.6, maxLng: -102.0 }
+  },
+  {
+    province: "Nunavut",
+    bounds: { minLat: 51.2, maxLat: 83.2, minLng: -120.0, maxLng: -60.0 }
+  }
+];
+
 function decodePricingKeyPart(value: string) {
   return decodeURIComponent(value);
 }
@@ -55,7 +126,31 @@ function findCanadianRegion(parts: string[]): ServiceRegion | null {
   return null;
 }
 
-function inferServiceRegion(zoneCode: string, pickupLocation?: string, destinationLocation?: string): ServiceRegion {
+export function findCanadianRegionByCoordinate(latitude?: number, longitude?: number): ServiceRegion | null {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  for (const region of coordinateRegions) {
+    const { minLat, maxLat, minLng, maxLng } = region.bounds;
+    if (latitude! >= minLat && latitude! <= maxLat && longitude! >= minLng && longitude! <= maxLng) {
+      return {
+        province: region.province,
+        city: region.city
+      };
+    }
+  }
+
+  return null;
+}
+
+export function inferServiceRegion(
+  zoneCode: string,
+  pickupLocation?: string,
+  destinationLocation?: string,
+  pickupLat?: number,
+  pickupLng?: number
+): ServiceRegion {
   const pickupParts = String(pickupLocation ?? "")
     .split(",")
     .map((part) => part.trim())
@@ -74,6 +169,11 @@ function inferServiceRegion(zoneCode: string, pickupLocation?: string, destinati
     return destinationRegion;
   }
 
+  const coordinateRegion = findCanadianRegionByCoordinate(pickupLat, pickupLng);
+  if (coordinateRegion) {
+    return coordinateRegion;
+  }
+
   const pickupCombined = pickupParts.join(", ");
   if (/\bwinnipeg\b/i.test(pickupCombined) || (!pickupCombined && zoneCode.startsWith("WPG-"))) {
     return { province: "Manitoba", city: "Winnipeg" };
@@ -88,8 +188,16 @@ export async function resolveBookingPricing(params: {
   customerUserId?: string;
   pickupLocation?: string;
   destinationLocation?: string;
+  pickupLat?: number;
+  pickupLng?: number;
 }) {
-  const region = inferServiceRegion(params.zoneCode, params.pickupLocation, params.destinationLocation);
+  const region = inferServiceRegion(
+    params.zoneCode,
+    params.pickupLocation,
+    params.destinationLocation,
+    params.pickupLat,
+    params.pickupLng
+  );
   const settings = await prisma.pricingSetting.findMany({
     where: {
       OR: [
@@ -241,14 +349,68 @@ export async function driverHasOverlap(driverId: string, scheduledStartAt: Date,
   );
 }
 
+function normalizeServiceArea(value?: string | null) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+const realtimeDispatchFreshnessMinutes = 5;
+const realtimeDispatchRadiusKm = 25;
+
+function driverMatchesServiceArea(
+  serviceAreas: string[],
+  zoneCode: string,
+  pickupLocation: string,
+  pickupLat: number,
+  pickupLng: number
+) {
+  const region = inferServiceRegion(zoneCode, pickupLocation, undefined, pickupLat, pickupLng);
+  const normalizedAreas = serviceAreas.map((value) => normalizeServiceArea(value)).filter(Boolean);
+  const zone = normalizeServiceArea(zoneCode);
+  const province = normalizeServiceArea(region.province);
+  const city = normalizeServiceArea(region.city);
+
+  if (!normalizedAreas.length) {
+    return false;
+  }
+
+  return normalizedAreas.some((area) => {
+    if (area === "canada" || area === "all" || area === "nationwide") {
+      return true;
+    }
+
+    if (area === zone || area === province || (city && area === city)) {
+      return true;
+    }
+
+    if (city && (area === `${province}:${city}` || area === `${city}, ${province}`)) {
+      return true;
+    }
+
+    if (province && area.includes(province)) {
+      return true;
+    }
+
+    if (city && area.includes(city)) {
+      return true;
+    }
+
+    return false;
+  });
+}
+
 export async function findEligibleDrivers(
+  requestType: "NOW" | "LATER",
   zoneCode: string,
   scheduledStartAt: Date,
   expectedDurationMinutes: number,
   pickupLat: number,
-  pickupLng: number
+  pickupLng: number,
+  pickupLocation: string
 ) {
-  const freshnessThreshold = new Date(Date.now() - appConfig.driverLocationFreshnessMinutes * 60_000);
+  const freshnessMinutes = requestType === "NOW" ? realtimeDispatchFreshnessMinutes : appConfig.driverLocationFreshnessMinutes;
+  const freshnessThreshold = new Date(Date.now() - freshnessMinutes * 60_000);
   const drivers = await prisma.driver.findMany({
     where: {
       approvedAt: {
@@ -263,9 +425,6 @@ export async function findEligibleDrivers(
       },
       locationUpdatedAt: {
         gte: freshnessThreshold
-      },
-      serviceAreas: {
-        has: zoneCode
       }
     },
     include: {
@@ -273,19 +432,37 @@ export async function findEligibleDrivers(
     }
   });
 
-  const eligible: Array<(typeof drivers)[number] & { distanceKm: number }> = [];
+  const eligible: Array<(typeof drivers)[number] & { distanceKm: number; matchesServiceArea: boolean }> = [];
 
   for (const driver of drivers) {
     const overlap = await driverHasOverlap(driver.id, scheduledStartAt, expectedDurationMinutes);
-    if (!overlap) {
-      eligible.push({
-        ...driver,
-        distanceKm: haversineDistanceKm(pickupLat, pickupLng, Number(driver.currentLatitude), Number(driver.currentLongitude))
-      });
+    if (overlap) {
+      continue;
     }
+
+    const distanceKm = haversineDistanceKm(pickupLat, pickupLng, Number(driver.currentLatitude), Number(driver.currentLongitude));
+    const matchesServiceArea = driverMatchesServiceArea(driver.serviceAreas, zoneCode, pickupLocation, pickupLat, pickupLng);
+
+    if (requestType === "NOW" && distanceKm > realtimeDispatchRadiusKm) {
+      continue;
+    }
+
+    eligible.push({
+      ...driver,
+      distanceKm,
+      matchesServiceArea
+    });
   }
 
-  return eligible.sort((left, right) => left.distanceKm - right.distanceKm).slice(0, appConfig.driverDispatchFanout);
+  return eligible
+    .sort((left, right) => {
+      if (requestType !== "NOW" && left.matchesServiceArea !== right.matchesServiceArea) {
+        return left.matchesServiceArea ? -1 : 1;
+      }
+
+      return left.distanceKm - right.distanceKm;
+    })
+    .slice(0, appConfig.driverDispatchFanout);
 }
 
 export function mapStateForBooking(booking: {
@@ -412,11 +589,13 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
   }
 
   const drivers = await findEligibleDrivers(
+    booking.requestType,
     booking.zoneCode,
     booking.scheduledStartAt,
     booking.expectedDurationMinutes,
     Number(booking.pickupLat),
-    Number(booking.pickupLng)
+    Number(booking.pickupLng),
+    booking.pickupLocation
   );
 
   if (drivers.length) {
