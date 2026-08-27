@@ -55,8 +55,8 @@ export function createApp() {
   app.use("/api", paymentsRoutes);
   app.use("/api", membershipsRoutes);
   app.use("/api", notificationsRoutes);
-  app.use("/api", adminRoutes);
   app.use("/api", blogRoutes);
+  app.use("/api", adminRoutes);
   app.use("/api", contactMessageRoutes);
   app.use("/api", tripMessagesRoutes);
 

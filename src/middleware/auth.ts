@@ -16,7 +16,7 @@ export function requireAuth(request: Request, _response: Response, next: NextFun
     const payload = verifyAccessToken(token);
     request.auth = {
       userId: payload.userId,
-      role: payload.role as UserRole
+      role: String(payload.role).toLowerCase() as UserRole
     };
     return next();
   } catch {
