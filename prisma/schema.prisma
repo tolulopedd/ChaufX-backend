@@ -107,6 +107,7 @@ enum NotificationType {
   TRIP_COMPLETED
   UPCOMING_TRIP
   APPLICATION_REVIEWED
+  TRIP_MESSAGE
 }
 
 enum NotificationChannel {
@@ -178,6 +179,7 @@ model User {
   reviewedApplications DriverApplication[] @relation("ApplicationReviewer")
   membershipPayments MembershipPayment[]
   blogPostsAuthored  BlogPost[]
+  tripMessagesSent   TripMessage[]
 }
 
 model BlogPost {
@@ -397,6 +399,7 @@ model Booking {
   rating          Rating?
   dispatches      BookingDispatch[]
   locationUpdates Location[]
+  messages        TripMessage[]
 
   @@index([status, scheduledStartAt])
   @@index([assignedDriverId, status])
@@ -486,6 +489,21 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+}
+
+model TripMessage {
+  id           String   @id @default(uuid())
+  bookingId    String
+  senderUserId String
+  body         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  sender  User    @relation(fields: [senderUserId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId, createdAt])
+  @@index([senderUserId, createdAt])
 }
 
 model Rating {
