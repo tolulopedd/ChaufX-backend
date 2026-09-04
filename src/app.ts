@@ -46,6 +46,8 @@ export function createApp() {
   app.get("/api/memberships/checkout/cancel", membershipCheckoutCancelHandler);
   app.use("/api", healthRoutes);
   app.use("/api", authRoutes);
+  // Public articles must be registered before routers that apply auth globally.
+  app.use("/api", blogRoutes);
   app.use("/api", driverOnboardingRoutes);
   app.use("/api", usersRoutes);
   app.use("/api", driversRoutes);
@@ -55,7 +57,6 @@ export function createApp() {
   app.use("/api", paymentsRoutes);
   app.use("/api", membershipsRoutes);
   app.use("/api", notificationsRoutes);
-  app.use("/api", blogRoutes);
   app.use("/api", adminRoutes);
   app.use("/api", contactMessageRoutes);
   app.use("/api", tripMessagesRoutes);
