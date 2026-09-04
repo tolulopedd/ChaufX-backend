@@ -45,6 +45,105 @@ export const bookingsRoutes = Router();
 
 bookingsRoutes.use(requireAuth);
 
+function formatCustomerDisplayName(fullName: string) {
+  const [firstName = "Customer", ...remainingNames] = fullName.trim().split(/\s+/);
+  const lastInitial = remainingNames.at(-1)?.[0];
+
+  return lastInitial ? `${firstName} ${lastInitial}.` : firstName;
+}
+
+function isVerifiedCustomer(customer: any) {
+  const primaryVehicle = customer.vehicles?.[0];
+
+  return Boolean(
+    customer.dateOfBirth &&
+      customer.primaryAddress &&
+      customer.emergencyContactName &&
+      customer.emergencyContactPhone &&
+      customer.identityDocument &&
+      primaryVehicle?.make &&
+      primaryVehicle?.model &&
+      primaryVehicle?.plateNumber &&
+      primaryVehicle?.registrationProvince &&
+      customer.vehicleComplianceConfirmedAt &&
+      customer.termsAcceptedAt &&
+      customer.privacyPolicyAcceptedAt &&
+      customer.identityVerificationConsentedAt &&
+      customer.vehicleAuthorityConfirmedAt
+  );
+}
+
+function toDriverBookingResponse(booking: any) {
+  const primaryVehicle = booking.vehicle ?? booking.customer.vehicles?.[0] ?? null;
+
+  return {
+    id: booking.id,
+    assignedDriverId: booking.assignedDriverId,
+    requestType: booking.requestType,
+    pickupLocation: booking.pickupLocation,
+    pickupLat: booking.pickupLat,
+    pickupLng: booking.pickupLng,
+    destinationLocation: booking.destinationLocation,
+    destinationLat: booking.destinationLat,
+    destinationLng: booking.destinationLng,
+    scheduledStartAt: booking.scheduledStartAt,
+    expectedDurationMinutes: booking.expectedDurationMinutes,
+    specialNotes: booking.specialNotes,
+    status: booking.status,
+    acceptedAt: booking.acceptedAt,
+    completedAt: booking.completedAt,
+    trip: booking.trip,
+    paymentReady: booking.payment?.status === "RECORDED",
+    dispatches: booking.dispatches,
+    customerSummary: {
+      displayName: formatCustomerDisplayName(booking.customer.user.fullName),
+      verified: isVerifiedCustomer(booking.customer),
+      memberSince: booking.customer.createdAt,
+      completedBookings: booking.customer._count.bookings,
+      vehicle: primaryVehicle ? `${primaryVehicle.make} ${primaryVehicle.model}` : null
+    }
+  };
+}
+
+export function hasCompleteCustomerBookingProfile(user: any) {
+  const vehicle = user.customerProfile?.vehicles[0];
+  const hasCompleteVehicle = Boolean(vehicle?.make && vehicle?.model && vehicle?.plateNumber && vehicle?.registrationProvince);
+
+  return Boolean(user.emailVerifiedAt && user.phone && user.customerProfile?.identityDocument && hasCompleteVehicle);
+}
+
+async function ensureCustomerCanBook(userId: string) {
+  const user = await prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    select: {
+      emailVerifiedAt: true,
+      phone: true,
+      customerProfile: {
+        select: {
+          identityDocument: { select: { id: true } },
+          vehicles: {
+            where: { isPrimary: true },
+            select: {
+              make: true,
+              model: true,
+              plateNumber: true,
+              registrationProvince: true
+            },
+            take: 1
+          }
+        }
+      }
+    }
+  });
+  if (!hasCompleteCustomerBookingProfile(user)) {
+    throw new AppError(
+      "Complete your Account details before booking.",
+      403,
+      "CUSTOMER_VERIFICATION_REQUIRED"
+    );
+  }
+}
+
 bookingsRoutes.post(
   "/bookings/estimate",
   requireRole(["customer"]),
@@ -86,6 +185,8 @@ bookingsRoutes.post(
   requireRole(["customer"]),
   asyncHandler(async (request, response) => {
     const input = createBookingSchema.parse(request.body);
+
+    await ensureCustomerCanBook(request.auth!.userId);
 
     const customer = await prisma.customerProfile.findUniqueOrThrow({
       where: { userId: request.auth!.userId }
@@ -187,12 +288,39 @@ bookingsRoutes.get(
         },
         include: {
           customer: {
-            include: {
-              user: true
+            select: {
+              createdAt: true,
+              dateOfBirth: true,
+              primaryAddress: true,
+              emergencyContactName: true,
+              emergencyContactPhone: true,
+              vehicleComplianceConfirmedAt: true,
+              termsAcceptedAt: true,
+              privacyPolicyAcceptedAt: true,
+              identityVerificationConsentedAt: true,
+              vehicleAuthorityConfirmedAt: true,
+              identityDocument: { select: { id: true } },
+              user: { select: { fullName: true } },
+              vehicles: {
+                where: { isPrimary: true },
+                select: { make: true, model: true, plateNumber: true, registrationProvince: true },
+                take: 1
+              },
+              _count: {
+                select: {
+                  bookings: {
+                    where: {
+                      status: BookingStatus.COMPLETED,
+                      payment: { is: { status: "RECORDED" } }
+                    }
+                  }
+                }
+              }
             }
           },
-          payment: true,
-          trip: true,
+          vehicle: { select: { make: true, model: true } },
+          payment: { select: { status: true } },
+          trip: { select: { id: true, status: true, startedAt: true, endedAt: true } },
           dispatches: {
             where: {
               driverId: driver.id
@@ -208,7 +336,7 @@ bookingsRoutes.get(
         }
       });
 
-      response.json(bookings);
+      response.json(bookings.map(toDriverBookingResponse));
       return;
     }
 

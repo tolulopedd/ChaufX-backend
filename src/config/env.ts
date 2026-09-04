@@ -38,7 +38,8 @@ const schema = z.object({
   AWS_S3_BUCKET: z.string().optional(),
   AWS_ACCESS_KEY_ID: z.string().optional(),
   AWS_SECRET_ACCESS_KEY: z.string().optional(),
-  AWS_S3_DOCUMENT_PREFIX: z.string().default("driver-documents")
+  AWS_S3_DOCUMENT_PREFIX: z.string().default("driver-documents"),
+  AWS_S3_CUSTOMER_DOCUMENT_PREFIX: z.string().default("customer-documents")
 });
 
 const parsedEnv = Object.fromEntries(

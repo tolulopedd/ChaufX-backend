@@ -85,8 +85,8 @@ function buildStorageName(fileName: string, mimeType?: string) {
   return `${safeBaseName}-${randomUUID()}${extension}`;
 }
 
-function buildS3Key(applicationId: string, fileName: string, mimeType?: string) {
-  return `${env.AWS_S3_DOCUMENT_PREFIX.replace(/^\/+|\/+$/g, "")}/${applicationId}/${buildStorageName(fileName, mimeType)}`;
+function buildS3Key(prefix: string, entityId: string, fileName: string, mimeType?: string) {
+  return `${prefix.replace(/^\/+|\/+$/g, "")}/${entityId}/${buildStorageName(fileName, mimeType)}`;
 }
 
 function buildS3Reference(bucket: string, key: string) {
@@ -133,7 +133,7 @@ export async function persistDriverApplicationDocument(options: {
 
   const s3Client = getS3Client();
   if (s3Client && env.AWS_S3_BUCKET) {
-    const key = buildS3Key(options.applicationId, options.fileName, mimeType);
+    const key = buildS3Key(env.AWS_S3_DOCUMENT_PREFIX, options.applicationId, options.fileName, mimeType);
 
     try {
       await s3Client.send(
@@ -170,6 +170,63 @@ export async function persistDriverApplicationDocument(options: {
 
   return {
     fileUrl: absolutePath,
+    mimeType
+  };
+}
+
+export async function persistCustomerIdentityDocument(options: {
+  customerProfileId: string;
+  fileName: string;
+  fileUrl: string;
+  mimeType?: string;
+}) {
+  if (!options.fileUrl.startsWith("data:")) {
+    throw new AppError("Government photo ID must be uploaded from the ChaufX app.", 400, "INVALID_ID_DOCUMENT");
+  }
+
+  const parsed = parseDataUrl(options.fileUrl);
+  const mimeType = options.mimeType || parsed.mimeType;
+  const allowedMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "application/pdf"]);
+
+  if (!mimeType || !allowedMimeTypes.has(mimeType)) {
+    throw new AppError("Upload a JPG, PNG, WEBP, HEIC, or PDF government photo ID.", 400, "INVALID_ID_DOCUMENT_TYPE");
+  }
+
+  if (parsed.buffer.length > 7 * 1024 * 1024) {
+    throw new AppError("Government photo ID files must be 7 MB or smaller.", 400, "ID_DOCUMENT_TOO_LARGE");
+  }
+
+  const s3Client = getS3Client();
+  if (!s3Client || !env.AWS_S3_BUCKET) {
+    throw new AppError(
+      "Government photo ID uploads are not configured yet. Please contact ChaufX support.",
+      503,
+      "ID_DOCUMENT_STORAGE_UNAVAILABLE"
+    );
+  }
+
+  const key = buildS3Key(env.AWS_S3_CUSTOMER_DOCUMENT_PREFIX, options.customerProfileId, options.fileName, mimeType);
+
+  try {
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: env.AWS_S3_BUCKET,
+        Key: key,
+        Body: parsed.buffer,
+        ContentType: mimeType,
+        Metadata: {
+          originalFileName: options.fileName,
+          documentType: "government-photo-id"
+        }
+      })
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown S3 upload error";
+    throw new AppError(`Unable to store government photo ID securely. (${message})`, 500, "ID_DOCUMENT_STORAGE_UPLOAD_FAILED");
+  }
+
+  return {
+    fileUrl: buildS3Reference(env.AWS_S3_BUCKET, key),
     mimeType
   };
 }

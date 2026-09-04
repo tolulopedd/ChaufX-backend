@@ -165,21 +165,21 @@ model User {
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
 
-  customerProfile CustomerProfile?
-  driver          Driver?
-  adminUser       AdminUser?
-  refreshTokens   RefreshToken[]
-  passwordResetTokens PasswordResetToken[]
-  pushDevices     PushDevice[]
-  notifications   Notification[]
-  applications    DriverApplication[]
-  ratingsWritten  Rating[]         @relation("RatingReviewer")
-  ratingsReceived Rating[]         @relation("RatingReviewed")
-  auditLogs       AuditLog[]       @relation("AuditActor")
-  reviewedApplications DriverApplication[] @relation("ApplicationReviewer")
-  membershipPayments MembershipPayment[]
-  blogPostsAuthored  BlogPost[]
-  tripMessagesSent   TripMessage[]
+  customerProfile      CustomerProfile?
+  driver               Driver?
+  adminUser            AdminUser?
+  refreshTokens        RefreshToken[]
+  passwordResetTokens  PasswordResetToken[]
+  pushDevices          PushDevice[]
+  notifications        Notification[]
+  applications         DriverApplication[]
+  ratingsWritten       Rating[]             @relation("RatingReviewer")
+  ratingsReceived      Rating[]             @relation("RatingReviewed")
+  auditLogs            AuditLog[]           @relation("AuditActor")
+  reviewedApplications DriverApplication[]  @relation("ApplicationReviewer")
+  membershipPayments   MembershipPayment[]
+  blogPostsAuthored    BlogPost[]
+  tripMessagesSent     TripMessage[]
 }
 
 model BlogPost {
@@ -202,21 +202,21 @@ model BlogPost {
 }
 
 model MembershipPayment {
-  id                String                  @id @default(uuid())
-  userId            String
-  tier              MembershipTier
-  billingCycle      MembershipBillingCycle
-  method            MembershipPaymentMethod
-  status            MembershipPaymentStatus @default(PENDING)
-  amount            Float
-  currency          String                  @default("CAD")
-  invoiceNumber     String                  @unique
-  stripeSessionId   String?                 @unique
-  interacEmail      String?
-  recordedAt        DateTime?
-  notes             String?
-  createdAt         DateTime                @default(now())
-  updatedAt         DateTime                @updatedAt
+  id              String                  @id @default(uuid())
+  userId          String
+  tier            MembershipTier
+  billingCycle    MembershipBillingCycle
+  method          MembershipPaymentMethod
+  status          MembershipPaymentStatus @default(PENDING)
+  amount          Float
+  currency        String                  @default("CAD")
+  invoiceNumber   String                  @unique
+  stripeSessionId String?                 @unique
+  interacEmail    String?
+  recordedAt      DateTime?
+  notes           String?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -225,15 +225,15 @@ model MembershipPayment {
 }
 
 model PushDevice {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   userId        String
-  expoPushToken String   @unique
+  expoPushToken String    @unique
   platform      String
   appVariant    String
   disabledAt    DateTime?
-  lastSeenAt    DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  lastSeenAt    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -242,13 +242,13 @@ model PushDevice {
 }
 
 model PasswordResetToken {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -272,15 +272,26 @@ model EmailVerificationToken {
 }
 
 model CustomerProfile {
-  id             String    @id @default(uuid())
-  userId         String    @unique
-  savedAddresses String[]
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                              String    @id @default(uuid())
+  userId                          String    @unique
+  savedAddresses                  String[]
+  dateOfBirth                     DateTime?
+  primaryAddress                  String?
+  emergencyContactName            String?
+  emergencyContactPhone           String?
+  vehicleRegistrationProvince     String?
+  vehicleComplianceConfirmedAt    DateTime?
+  termsAcceptedAt                 DateTime?
+  privacyPolicyAcceptedAt         DateTime?
+  identityVerificationConsentedAt DateTime?
+  vehicleAuthorityConfirmedAt     DateTime?
+  createdAt                       DateTime  @default(now())
+  updatedAt                       DateTime  @updatedAt
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vehicles Vehicle[]
-  bookings Booking[]
+  user             User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicles         Vehicle[]
+  bookings         Booking[]
+  identityDocument CustomerIdentityDocument?
 }
 
 model Driver {
@@ -302,15 +313,15 @@ model Driver {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  application     DriverApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
-  currentZone     ServiceZone?       @relation(fields: [currentZoneId], references: [id], onDelete: SetNull)
-  bookings        Booking[]
-  trips           Trip[]
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application       DriverApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  currentZone       ServiceZone?       @relation(fields: [currentZoneId], references: [id], onDelete: SetNull)
+  bookings          Booking[]
+  trips             Trip[]
   bookingDispatches BookingDispatch[]
-  documents       Document[]
-  locationUpdates Location[]
-  settlements     DriverSettlement[]
+  documents         Document[]
+  locationUpdates   Location[]
+  settlements       DriverSettlement[]
 }
 
 model AdminUser {
@@ -350,22 +361,36 @@ model DriverApplication {
 }
 
 model Vehicle {
-  id          String   @id @default(uuid())
-  customerId  String
-  make        String
-  model       String
-  plateNumber String
-  color       String?
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                   String   @id @default(uuid())
+  customerId           String
+  make                 String
+  model                String
+  plateNumber          String
+  registrationProvince String?
+  isPrimary            Boolean  @default(false)
+  color                String?
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   customer CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Cascade)
   bookings Booking[]
 }
 
+model CustomerIdentityDocument {
+  id                String   @id @default(uuid())
+  customerProfileId String   @unique
+  fileName          String
+  fileUrl           String
+  mimeType          String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  customerProfile CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
+}
+
 model Booking {
-  id                      String        @id @default(uuid())
+  id                      String             @id @default(uuid())
   customerId              String
   vehicleId               String?
   assignedDriverId        String?
@@ -384,16 +409,16 @@ model Booking {
   zoneCode                String
   activationWindowStartAt DateTime
   activationWindowEndAt   DateTime
-  status                  BookingStatus @default(AWAITING_PAYMENT)
+  status                  BookingStatus      @default(AWAITING_PAYMENT)
   acceptedAt              DateTime?
   completedAt             DateTime?
   cancelledAt             DateTime?
-  createdAt               DateTime      @default(now())
-  updatedAt               DateTime      @updatedAt
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
-  customer        CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  vehicle         Vehicle?        @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
-  assignedDriver  Driver?         @relation(fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  customer        CustomerProfile   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  vehicle         Vehicle?          @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  assignedDriver  Driver?           @relation(fields: [assignedDriverId], references: [id], onDelete: SetNull)
   trip            Trip?
   payment         Payment?
   rating          Rating?
@@ -407,15 +432,15 @@ model Booking {
 }
 
 model BookingDispatch {
-  id         String               @id @default(uuid())
-  bookingId  String
-  driverId   String
-  distanceKm Float?
-  status     BookingDispatchStatus @default(PENDING)
-  notifiedAt DateTime             @default(now())
+  id          String                @id @default(uuid())
+  bookingId   String
+  driverId    String
+  distanceKm  Float?
+  status      BookingDispatchStatus @default(PENDING)
+  notifiedAt  DateTime              @default(now())
   respondedAt DateTime?
-  createdAt  DateTime             @default(now())
-  updatedAt  DateTime             @updatedAt
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   driver  Driver  @relation(fields: [driverId], references: [id], onDelete: Cascade)
@@ -426,17 +451,17 @@ model BookingDispatch {
 }
 
 model Trip {
-  id                 String     @id @default(uuid())
-  bookingId          String     @unique
-  driverId           String
-  status             TripStatus @default(SCHEDULED)
-  startedAt          DateTime?
-  endedAt            DateTime?
-  navigationEnabled  Boolean    @default(false)
-  liveTrackingEnabled Boolean   @default(false)
-  routePolyline      Json?
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  id                  String     @id @default(uuid())
+  bookingId           String     @unique
+  driverId            String
+  status              TripStatus @default(SCHEDULED)
+  startedAt           DateTime?
+  endedAt             DateTime?
+  navigationEnabled   Boolean    @default(false)
+  liveTrackingEnabled Boolean    @default(false)
+  routePolyline       Json?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   driver  Driver  @relation(fields: [driverId], references: [id], onDelete: Cascade)
@@ -475,15 +500,15 @@ model Payment {
 }
 
 model Notification {
-  id        String             @id @default(uuid())
+  id        String              @id @default(uuid())
   userId    String
   type      NotificationType
   title     String
   body      String
   channel   NotificationChannel
-  status    NotificationStatus @default(PENDING)
+  status    NotificationStatus  @default(PENDING)
   meta      Json?
-  createdAt DateTime           @default(now())
+  createdAt DateTime            @default(now())
   readAt    DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -515,9 +540,9 @@ model Rating {
   comment        String?
   createdAt      DateTime @default(now())
 
-  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  reviewer  User    @relation("RatingReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
-  reviewed  User    @relation("RatingReviewed", fields: [reviewedUserId], references: [id], onDelete: Cascade)
+  booking  Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  reviewer User    @relation("RatingReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+  reviewed User    @relation("RatingReviewed", fields: [reviewedUserId], references: [id], onDelete: Cascade)
 }
 
 model Document {
@@ -583,12 +608,12 @@ model DriverSettlement {
 }
 
 model RefreshToken {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
   tokenHash String
   expiresAt DateTime
   revokedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
