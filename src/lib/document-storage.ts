@@ -18,6 +18,10 @@ function sanitizeFileName(fileName: string) {
     .replace(/^-|-$/g, "");
 }
 
+function sanitizeMetadataFileName(fileName: string) {
+  return sanitizeFileName(fileName) || "document";
+}
+
 function extensionFromMimeType(mimeType?: string) {
   if (!mimeType) {
     return "";
@@ -143,14 +147,15 @@ export async function persistDriverApplicationDocument(options: {
           Body: parsed.buffer,
           ContentType: mimeType,
           Metadata: {
-            originalFileName: options.fileName
+            // S3 metadata becomes HTTP headers, which must use ASCII-safe values.
+            originalFileName: sanitizeMetadataFileName(options.fileName)
           }
         })
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown S3 upload error";
       throw new AppError(
-        `Unable to upload driver documents to secure storage. Please verify AWS_REGION, AWS_S3_BUCKET, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY on the backend service. (${message})`,
+        `Unable to upload driver documents to secure storage. (${message})`,
         500,
         "DOCUMENT_STORAGE_UPLOAD_FAILED"
       );
@@ -215,7 +220,7 @@ export async function persistCustomerIdentityDocument(options: {
         Body: parsed.buffer,
         ContentType: mimeType,
         Metadata: {
-          originalFileName: options.fileName,
+          originalFileName: sanitizeMetadataFileName(options.fileName),
           documentType: "government-photo-id"
         }
       })
