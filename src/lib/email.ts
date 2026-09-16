@@ -9,9 +9,7 @@ type TransactionalEmail = {
 
 export async function sendTransactionalEmail(message: TransactionalEmail) {
   if (!env.RESEND_API_KEY) {
-    return {
-      delivered: false as const
-    };
+    throw new Error("Transactional email is not configured. Set RESEND_API_KEY before sending email.");
   }
 
   const response = await fetch("https://api.resend.com/emails", {

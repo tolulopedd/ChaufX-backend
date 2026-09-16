@@ -39,9 +39,9 @@ const onboardingSchema = z.object({
   password: z.string().min(8).optional(),
   address: z.string().min(5),
   licenseNumber: z.string().min(5),
-  yearsOfExperience: z.coerce.number().int().min(0),
+  yearsOfExperience: z.coerce.number().int().min(2),
   emergencyContact: z.string().min(2).optional(),
-  preferredServiceAreas: z.array(z.string()).default([]),
+  preferredServiceAreas: z.array(z.string().trim().min(2)).min(1),
   availabilitySchedule: z.string().optional(),
   documents: z.array(documentSchema).default([])
 });
@@ -112,7 +112,8 @@ driverOnboardingRoutes.post(
         yearsOfExperience: input.yearsOfExperience,
         emergencyContact: input.emergencyContact ?? "Not provided",
         preferredServiceAreas: input.preferredServiceAreas,
-        availabilitySchedule: input.availabilitySchedule
+        availabilitySchedule: input.availabilitySchedule,
+        driverAbstractInitiatedAt: new Date()
       },
       update: {
         fullName: input.fullName,
@@ -126,7 +127,11 @@ driverOnboardingRoutes.post(
         availabilitySchedule: input.availabilitySchedule,
         status: "SUBMITTED",
         reviewNote: null,
-        reviewedAt: null
+        reviewedAt: null,
+        backgroundCheckComment: null,
+        driverAbstractInitiatedAt: new Date(),
+        criminalCheckInvitedAt: null,
+        criminalCheckInvitedByUserId: null
       },
       include: {
         documents: true

@@ -51,6 +51,8 @@ const settlementConfigPrefix = "SETTLEMENT::";
 const platformSharePercentCode = `${settlementConfigPrefix}PLATFORM_SHARE_PERCENT`;
 const fallbackFlatFeeCode = `${fallbackPricingPrefix}FLAT_FEE`;
 const fallbackMinHoursCode = `${fallbackPricingPrefix}MIN_HOURS`;
+const tritonCriminalCheckEnglishUrl = "https://secure.tritoncanada.ca/Eiv/InitiateEiv?id=c01c17a3-10f6-fdfd-f460-831fb25a3dc7&language=en";
+const tritonCriminalCheckFrenchUrl = "https://secure.tritoncanada.ca/Eiv/InitiateEiv?id=c01c17a3-10f6-fdfd-f460-831fb25a3dc7&language=fr";
 
 function disableResponseCache(response: Response) {
   response.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -165,6 +167,30 @@ function buildDriverApplicationStatusEmail(params: {
       </div>
     `,
     text: `Dear ${firstName}, there is an update on your ChaufX Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
+  };
+}
+
+function buildCriminalCheckInvitationEmail(params: { fullName: string; note: string }) {
+  const firstName = firstNameFromFullName(params.fullName);
+
+  return {
+    subject: "Continue your ChaufX criminal record verification",
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
+        <p style="margin: 0 0 16px;">Dear ${firstName},</p>
+        <p style="margin: 0 0 16px;">Your driver abstract review is complete. Please continue with your <strong>Criminal Record and</strong> judicial matters check.</p>
+        <p style="margin: 0 0 16px;">${params.note}</p>
+        <p style="margin: 24px 0 12px;">Choose your preferred language:</p>
+        <p style="margin: 0 0 12px;">
+          <a href="${tritonCriminalCheckEnglishUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">Continue in English</a>
+        </p>
+        <p style="margin: 0;">
+          <a href="${tritonCriminalCheckFrenchUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">Continuer en français</a>
+        </p>
+        <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
+      </div>
+    `,
+    text: `Dear ${firstName}, your driver abstract review is complete. Please continue with your Criminal Record and judicial matters check. ${params.note} English: ${tritonCriminalCheckEnglishUrl} French: ${tritonCriminalCheckFrenchUrl}\n\nRegards,\nChaufX Team`
   };
 }
 
@@ -375,6 +401,10 @@ adminRoutes.post(
     const approved = input.decision === "approved";
     const additionalInfo = input.decision === "additional_info";
 
+    if (approved && application.driverAbstractInitiatedAt && !application.criminalCheckInvitedAt) {
+      throw new AppError("Confirm the driver abstract and send the criminal record verification before approving this application.", 400, "BACKGROUND_CHECK_INCOMPLETE");
+    }
+
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const sanitizedAvailabilitySchedule = buildDriverAvailabilitySummary(application.availabilitySchedule);
       const updatedApplication = await tx.driverApplication.update({
@@ -464,6 +494,87 @@ adminRoutes.post(
     } catch (error) {
       console.error("Unable to send driver application review email", error);
     }
+
+    response.json(result);
+  })
+);
+
+adminRoutes.post(
+  "/admin/applications/:applicationId/background-check",
+  asyncHandler(async (request, response) => {
+    const applicationId = paramValue(request.params.applicationId);
+    const input = z.object({ comment: z.string().trim().min(2).max(2000) }).parse(request.body);
+
+    const application = await prisma.driverApplication.findUnique({
+      where: { id: applicationId },
+      include: { user: true }
+    });
+
+    if (!application?.userId || !application.user) {
+      throw new AppError("Driver application is missing its linked account", 400, "INVALID_APPLICATION");
+    }
+
+    if (application.status === "APPROVED" || application.status === "REJECTED") {
+      throw new AppError("A finalised application cannot receive a background-check invitation.", 400, "APPLICATION_FINALISED");
+    }
+
+    if (application.criminalCheckInvitedAt) {
+      throw new AppError("A criminal record verification link has already been sent for this application.", 409, "CRIMINAL_CHECK_ALREADY_INVITED");
+    }
+
+    const emailMessage = buildCriminalCheckInvitationEmail({
+      fullName: application.fullName,
+      note: input.comment
+    });
+    await sendTransactionalEmail({
+      to: application.email,
+      subject: emailMessage.subject,
+      html: emailMessage.html,
+      text: emailMessage.text
+    });
+
+    const invitedAt = new Date();
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const updatedApplication = await tx.driverApplication.update({
+        where: { id: application.id },
+        data: {
+          status: "UNDER_REVIEW",
+          reviewNote: null,
+          backgroundCheckComment: input.comment,
+          criminalCheckInvitedAt: invitedAt,
+          criminalCheckInvitedByUserId: request.auth!.userId,
+          reviewedByUserId: request.auth!.userId,
+          reviewedAt: invitedAt
+        }
+      });
+
+      await tx.user.update({
+        where: { id: application.userId },
+        data: { status: AccountStatus.PENDING_APPROVAL }
+      });
+
+      await tx.notification.create({
+        data: {
+          userId: application.userId,
+          type: "APPLICATION_REVIEWED",
+          title: "Criminal record verification required",
+          body: input.comment,
+          channel: "EMAIL",
+          status: "SENT",
+          meta: { applicationId: application.id, stage: "CRIMINAL_RECORD_INVITATION" }
+        }
+      });
+
+      return updatedApplication;
+    });
+
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "DRIVER_CRIMINAL_CHECK_INVITED",
+      entityType: "DriverApplication",
+      entityId: application.id,
+      details: { comment: input.comment, invitedAt: invitedAt.toISOString() }
+    });
 
     response.json(result);
   })
