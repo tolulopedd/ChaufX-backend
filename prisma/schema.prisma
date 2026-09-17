@@ -137,6 +137,7 @@ enum ContactMessageStatus {
 enum EmailVerificationPurpose {
   CUSTOMER_SIGNUP
   DRIVER_ONBOARDING
+  DRIVER_APPLICATION_UPDATE
 }
 
 enum DocumentType {
@@ -349,6 +350,7 @@ model DriverApplication {
   availabilitySchedule  String?
   status                DriverApplicationStatus @default(SUBMITTED)
   reviewNote            String?
+  applicantResponse     String?
   backgroundCheckComment String?
   driverAbstractInitiatedAt DateTime?
   criminalCheckInvitedAt DateTime?

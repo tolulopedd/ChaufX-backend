@@ -23,6 +23,9 @@ import { createDocumentAccessUrl, isS3DocumentReference } from "../../lib/docume
 import { sendTransactionalEmail } from "../../lib/email.js";
 import { env } from "../../config/env.js";
 import { hashPassword } from "../../lib/auth.js";
+import { DRIVER_WELCOME_PASSWORD_TTL_MS, issuePasswordResetToken } from "../../lib/password-reset.js";
+import { DRIVER_APPLICATION_UPDATE_TTL_MS, issueEmailVerificationToken } from "../../lib/email-verification.js";
+import { EmailVerificationPurpose } from "@prisma/client";
 
 export const adminRoutes = Router();
 
@@ -105,68 +108,74 @@ function buildDriverApplicationStatusEmail(params: {
   fullName: string;
   email: string;
   note: string;
+  setPasswordUrl?: string;
+  applicationUpdateUrl?: string;
 }) {
   const firstName = firstNameFromFullName(params.fullName);
   const statusUrl = new URL("/driver/status", env.CLIENT_APP_URL);
   statusUrl.searchParams.set("email", params.email);
-  const loginUrl = new URL("/driver/login", env.CLIENT_APP_URL);
 
   if (params.decision === "approved") {
     return {
-      subject: "Your ChaufX Canada driver application has been approved",
+      subject: "Welcome to ChaufX Driver - set your password",
       html: `
         <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
           <p style="margin: 0 0 16px;">Dear ${firstName},</p>
-          <p style="margin: 0 0 16px;">Your ChaufX Canada driver application has been approved.</p>
+          <p style="margin: 0 0 16px;">Your ChaufX driver application has been approved.</p>
           <p style="margin: 0 0 16px;">${params.note}</p>
           <p style="margin: 24px 0;">
-            <a href="${loginUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
-              Go to driver login
+            <a href="${params.setPasswordUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+              Set your password
             </a>
           </p>
-          <p style="margin: 0 0 12px;">You can also review your onboarding status here:</p>
-          <p style="margin: 0;"><a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer">${statusUrl.toString()}</a></p>
+          <p style="margin: 0;">This link expires in 24 hours.</p>
+          <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
         </div>
       `,
-      text: `Dear ${firstName}, your ChaufX Canada driver application has been approved. ${params.note} Driver login: ${loginUrl.toString()} Status page: ${statusUrl.toString()}`
+      text: `Dear ${firstName}, your ChaufX driver application has been approved. ${params.note} Set your password: ${params.setPasswordUrl} This link expires in 24 hours.\n\nRegards,\nChaufX Team`
     };
   }
 
   if (params.decision === "additional_info") {
     return {
-      subject: "Additional information is required for your ChaufX Canada application",
+      subject: "Additional information is required for your ChaufX application",
       html: `
         <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
           <p style="margin: 0 0 16px;">Dear ${firstName},</p>
-          <p style="margin: 0 0 16px;">Additional information is required to continue reviewing your ChaufX Canada driver application.</p>
+          <p style="margin: 0 0 16px;">Additional information is required to continue reviewing your ChaufX driver application.</p>
           <p style="margin: 0 0 16px;">${params.note}</p>
           <p style="margin: 24px 0;">
-            <a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
-              Check application status
+            <a href="${params.applicationUpdateUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+              Update application
             </a>
           </p>
-          <p style="margin: 0;">Please review the note above and follow the next steps shared by the ChaufX team.</p>
+          <p style="margin: 0;">This link expires in 48 hours.</p>
+          <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
         </div>
       `,
-      text: `Dear ${firstName}, additional information is required to continue reviewing your ChaufX Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
+      text: `Dear ${firstName}, additional information is required to continue reviewing your ChaufX driver application. ${params.note} Update application: ${params.applicationUpdateUrl} This link expires in 48 hours.\n\nRegards,\nChaufX Team`
     };
   }
 
   return {
-    subject: "Update on your ChaufX Canada driver application",
+    subject: "Update on your ChaufX driver application",
     html: `
       <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
         <p style="margin: 0 0 16px;">Dear ${firstName},</p>
-        <p style="margin: 0 0 16px;">There is an update on your ChaufX Canada driver application.</p>
+        <p style="margin: 0 0 16px;">Thank you for your interest in becoming a driver with ChaufX and for taking the time to complete your application.</p>
+        <p style="margin: 0 0 16px;">After reviewing your application, we are unable to proceed with your driver onboarding at this time.</p>
         <p style="margin: 0 0 16px;">${params.note}</p>
+        <p style="margin: 0 0 16px;">You can review your application status and any additional information using the link below:</p>
         <p style="margin: 24px 0;">
           <a href="${statusUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
-            Check application status
+            Check Application Status
           </a>
         </p>
+        <p style="margin: 0;">Thank you for your interest in ChaufX. We wish you all the best.</p>
+        <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
       </div>
     `,
-    text: `Dear ${firstName}, there is an update on your ChaufX Canada driver application. ${params.note} Status page: ${statusUrl.toString()}`
+    text: `Dear ${firstName},\n\nThank you for your interest in becoming a driver with ChaufX and for taking the time to complete your application.\n\nAfter reviewing your application, we are unable to proceed with your driver onboarding at this time.\n\n${params.note}\n\nYou can review your application status and any additional information using the link below:\n${statusUrl.toString()}\n\nThank you for your interest in ChaufX. We wish you all the best.\n\nRegards,\nChaufX Team`
   };
 }
 
@@ -412,6 +421,7 @@ adminRoutes.post(
         data: {
           status: approved ? "APPROVED" : additionalInfo ? "UNDER_REVIEW" : "REJECTED",
           reviewNote: input.note,
+          applicantResponse: additionalInfo ? null : application.applicantResponse,
           reviewedByUserId: request.auth!.userId,
           reviewedAt: new Date()
         }
@@ -478,11 +488,30 @@ adminRoutes.post(
     });
 
     try {
+      const applicationUpdateToken = additionalInfo
+        ? await issueEmailVerificationToken({
+            email: application.email,
+            purpose: EmailVerificationPurpose.DRIVER_APPLICATION_UPDATE,
+            payload: { applicationId: application.id },
+            ttlMs: DRIVER_APPLICATION_UPDATE_TTL_MS
+          })
+        : undefined;
+      const passwordResetToken = approved
+        ? await issuePasswordResetToken(application.userId!, DRIVER_WELCOME_PASSWORD_TTL_MS)
+        : undefined;
+      const setPasswordUrl = passwordResetToken
+        ? new URL(`/reset-password?token=${passwordResetToken}`, env.CLIENT_APP_URL).toString()
+        : undefined;
+      const applicationUpdateUrl = applicationUpdateToken
+        ? new URL(`/driver/application-form?updateToken=${applicationUpdateToken}`, env.CLIENT_APP_URL).toString()
+        : undefined;
       const emailMessage = buildDriverApplicationStatusEmail({
         decision: input.decision,
         fullName: application.fullName,
         email: application.email,
-        note: input.note
+        note: input.note,
+        setPasswordUrl,
+        applicationUpdateUrl
       });
 
       await sendTransactionalEmail({

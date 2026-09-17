@@ -103,7 +103,7 @@ async function buildAndSendVerificationEmail(params: {
         ? `
       <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
         <p style="margin: 0 0 16px;">Dear ${params.firstName},</p>
-        <p style="margin: 0 0 16px;">This email is for your ChaufX Canada driver onboarding.</p>
+        <p style="margin: 0 0 16px;">This email is for your ChaufX driver onboarding.</p>
         <p style="margin: 0 0 16px;">Please verify your email address to continue your onboarding and access the driver application form.</p>
         <p style="margin: 24px 0;">
           <a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
@@ -113,12 +113,13 @@ async function buildAndSendVerificationEmail(params: {
         <p style="margin: 0 0 12px;">After verification, you will be taken directly to the onboarding application form.</p>
         <p style="margin: 16px 0 8px;">If the button does not work, copy and paste this link into your browser:</p>
         <p style="margin: 0;"><a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer">${verifyUrl.toString()}</a></p>
+        <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
       </div>
     `
         : `
       <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
         <p style="margin: 0 0 16px;">Hello ${params.firstName},</p>
-        <p style="margin: 0 0 16px;">Welcome to ChaufX Canada.</p>
+        <p style="margin: 0 0 16px;">Welcome to ChaufX.</p>
         <p style="margin: 0 0 16px;">Please verify your email address to finish setting up your customer account and continue with ChaufX.</p>
         <p style="margin: 24px 0;">
           <a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
@@ -127,12 +128,13 @@ async function buildAndSendVerificationEmail(params: {
         </p>
         <p style="margin: 16px 0 8px;">If the button does not work, copy and paste this link into your browser:</p>
         <p style="margin: 0;"><a href="${verifyUrl.toString()}" target="_blank" rel="noopener noreferrer">${verifyUrl.toString()}</a></p>
+        <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
       </div>
     `,
     text:
       params.purpose === EmailVerificationPurpose.DRIVER_ONBOARDING
-        ? `Dear ${params.firstName}, this email is for your ChaufX Canada driver onboarding. Verify your email to continue: ${verifyUrl.toString()}`
-        : `Hello ${params.firstName}, welcome to ChaufX Canada. Verify your email to continue: ${verifyUrl.toString()}`
+        ? `Dear ${params.firstName}, this email is for your ChaufX driver onboarding. Verify your email to continue: ${verifyUrl.toString()}\n\nRegards,\nChaufX Team`
+        : `Hello ${params.firstName}, welcome to ChaufX. Verify your email to continue: ${verifyUrl.toString()}\n\nRegards,\nChaufX Team`
   });
 
   return {
@@ -337,9 +339,10 @@ authRoutes.post(
             <p style="margin: 16px 0 8px;">If the button does not work, copy and paste this link into your browser:</p>
             <p style="margin: 0 0 16px;"><a href="${resetUrl.toString()}" target="_blank" rel="noopener noreferrer">${resetUrl.toString()}</a></p>
             <p style="margin: 0; color: #64748b;">If you did not request this change, you can safely ignore this email.</p>
+            <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
           </div>
         `,
-        text: `Hello ${user.fullName.trim().split(/\s+/)[0] ?? user.fullName}, reset your ChaufX password here: ${resetUrl.toString()}`
+        text: `Hello ${user.fullName.trim().split(/\s+/)[0] ?? user.fullName}, reset your ChaufX password here: ${resetUrl.toString()}\n\nRegards,\nChaufX Team`
       });
 
       await prisma.notification.create({

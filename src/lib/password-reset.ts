@@ -4,12 +4,13 @@ import { hashPassword } from "./auth.js";
 import { prisma } from "./prisma.js";
 
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+export const DRIVER_WELCOME_PASSWORD_TTL_MS = 24 * 60 * 60 * 1000;
 
 function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export async function issuePasswordResetToken(userId: string) {
+export async function issuePasswordResetToken(userId: string, ttlMs = PASSWORD_RESET_TTL_MS) {
   const token = randomBytes(32).toString("hex");
 
   await prisma.passwordResetToken.deleteMany({
@@ -23,7 +24,7 @@ export async function issuePasswordResetToken(userId: string) {
     data: {
       userId,
       tokenHash: tokenHash(token),
-      expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS)
+      expiresAt: new Date(Date.now() + ttlMs)
     }
   });
 

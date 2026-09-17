@@ -4,6 +4,7 @@ import { AppError } from "../common/AppError.js";
 import { prisma } from "./prisma.js";
 
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
+export const DRIVER_APPLICATION_UPDATE_TTL_MS = 48 * 60 * 60 * 1000;
 
 function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -13,6 +14,7 @@ export async function issueEmailVerificationToken(params: {
   email: string;
   purpose: EmailVerificationPurpose;
   payload?: Prisma.InputJsonValue;
+  ttlMs?: number;
 }) {
   const token = randomBytes(32).toString("hex");
 
@@ -30,7 +32,7 @@ export async function issueEmailVerificationToken(params: {
       purpose: params.purpose,
       tokenHash: tokenHash(token),
       payload: params.payload,
-      expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS)
+      expiresAt: new Date(Date.now() + (params.ttlMs ?? EMAIL_VERIFICATION_TTL_MS))
     }
   });
 
@@ -88,4 +90,34 @@ export async function requireVerifiedEmailToken(params: {
   }
 
   return record;
+}
+
+export async function requireDriverApplicationUpdateToken(rawToken: string) {
+  const record = await readEmailVerificationToken(rawToken);
+
+  if (record.purpose !== EmailVerificationPurpose.DRIVER_APPLICATION_UPDATE) {
+    throw new AppError("This application update link is invalid.", 400, "INVALID_APPLICATION_UPDATE_TOKEN");
+  }
+
+  if (record.usedAt) {
+    throw new AppError("This application update link has already been used.", 400, "USED_APPLICATION_UPDATE_TOKEN");
+  }
+
+  const applicationId =
+    record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+      ? (record.payload as { applicationId?: unknown }).applicationId
+      : undefined;
+
+  if (typeof applicationId !== "string" || !applicationId) {
+    throw new AppError("This application update link is invalid.", 400, "INVALID_APPLICATION_UPDATE_TOKEN");
+  }
+
+  return { record, applicationId };
+}
+
+export async function consumeEmailVerificationToken(tokenId: string) {
+  await prisma.emailVerificationToken.update({
+    where: { id: tokenId },
+    data: { usedAt: new Date() }
+  });
 }
