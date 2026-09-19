@@ -8,6 +8,7 @@ import { env } from "../config/env.js";
 import { AppError } from "../common/AppError.js";
 
 const storageRoot = fileURLToPath(new URL("../../storage/driver-documents", import.meta.url));
+const customerIdentityStorageRoot = fileURLToPath(new URL("../../storage/customer-identity-documents", import.meta.url));
 const s3Protocol = "s3://";
 
 function sanitizeFileName(fileName: string) {
@@ -202,36 +203,40 @@ export async function persistCustomerIdentityDocument(options: {
   }
 
   const s3Client = getS3Client();
-  if (!s3Client || !env.AWS_S3_BUCKET) {
-    throw new AppError(
-      "Government photo ID uploads are not configured yet. Please contact ChaufX support.",
-      503,
-      "ID_DOCUMENT_STORAGE_UNAVAILABLE"
-    );
+  if (s3Client && env.AWS_S3_BUCKET) {
+    const key = buildS3Key(env.AWS_S3_CUSTOMER_DOCUMENT_PREFIX, options.customerProfileId, options.fileName, mimeType);
+
+    try {
+      await s3Client.send(
+        new PutObjectCommand({
+          Bucket: env.AWS_S3_BUCKET,
+          Key: key,
+          Body: parsed.buffer,
+          ContentType: mimeType,
+          Metadata: {
+            originalFileName: sanitizeMetadataFileName(options.fileName),
+            documentType: "government-photo-id"
+          }
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown S3 upload error";
+      throw new AppError(`Unable to store government photo ID securely. (${message})`, 500, "ID_DOCUMENT_STORAGE_UPLOAD_FAILED");
+    }
+
+    return {
+      fileUrl: buildS3Reference(env.AWS_S3_BUCKET, key),
+      mimeType
+    };
   }
 
-  const key = buildS3Key(env.AWS_S3_CUSTOMER_DOCUMENT_PREFIX, options.customerProfileId, options.fileName, mimeType);
-
-  try {
-    await s3Client.send(
-      new PutObjectCommand({
-        Bucket: env.AWS_S3_BUCKET,
-        Key: key,
-        Body: parsed.buffer,
-        ContentType: mimeType,
-        Metadata: {
-          originalFileName: sanitizeMetadataFileName(options.fileName),
-          documentType: "government-photo-id"
-        }
-      })
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown S3 upload error";
-    throw new AppError(`Unable to store government photo ID securely. (${message})`, 500, "ID_DOCUMENT_STORAGE_UPLOAD_FAILED");
-  }
+  const directory = path.join(customerIdentityStorageRoot, options.customerProfileId);
+  await mkdir(directory, { recursive: true });
+  const absolutePath = path.join(directory, buildStorageName(options.fileName, mimeType));
+  await writeFile(absolutePath, parsed.buffer);
 
   return {
-    fileUrl: buildS3Reference(env.AWS_S3_BUCKET, key),
+    fileUrl: absolutePath,
     mimeType
   };
 }

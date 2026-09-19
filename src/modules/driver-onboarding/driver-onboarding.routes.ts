@@ -1,4 +1,10 @@
-import { AccountStatus, EmailVerificationPurpose, UserRole } from "@prisma/client";
+import {
+  AccountStatus,
+  DriverApplicationReviewAuthor,
+  DriverApplicationReviewEvent,
+  EmailVerificationPurpose,
+  UserRole
+} from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
@@ -220,6 +226,17 @@ driverOnboardingRoutes.post(
         documents: true
       }
     });
+
+    if (applicationUpdate && input.applicantResponse) {
+      await prisma.driverApplicationReviewHistory.create({
+        data: {
+          applicationId: applicationWithDocuments.id,
+          author: DriverApplicationReviewAuthor.DRIVER,
+          event: DriverApplicationReviewEvent.APPLICATION_RESUBMITTED,
+          note: input.applicantResponse
+        }
+      });
+    }
 
     await createAuditLog({
       action: applicationUpdate ? "DRIVER_APPLICATION_RESUBMITTED" : "DRIVER_APPLICATION_SUBMITTED",

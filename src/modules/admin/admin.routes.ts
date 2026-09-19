@@ -1,6 +1,8 @@
 import {
   AccountStatus,
   BookingStatus,
+  DriverApplicationReviewAuthor,
+  DriverApplicationReviewEvent,
   MembershipBillingCycle,
   MembershipStatus,
   MembershipTier,
@@ -188,6 +190,7 @@ function buildCriminalCheckInvitationEmail(params: { fullName: string; note: str
       <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
         <p style="margin: 0 0 16px;">Dear ${firstName},</p>
         <p style="margin: 0 0 16px;">Your driver abstract review is complete. Please continue with your <strong>Criminal Record and</strong> judicial matters check.</p>
+        <p style="margin: 0 0 16px;">ChaufX will cover the cost of this verification. There is no charge to you.</p>
         <p style="margin: 0 0 16px;">${params.note}</p>
         <p style="margin: 24px 0 12px;">Choose your preferred language:</p>
         <p style="margin: 0 0 12px;">
@@ -199,7 +202,7 @@ function buildCriminalCheckInvitationEmail(params: { fullName: string; note: str
         <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
       </div>
     `,
-    text: `Dear ${firstName}, your driver abstract review is complete. Please continue with your Criminal Record and judicial matters check. ${params.note} English: ${tritonCriminalCheckEnglishUrl} French: ${tritonCriminalCheckFrenchUrl}\n\nRegards,\nChaufX Team`
+    text: `Dear ${firstName}, your driver abstract review is complete. Please continue with your Criminal Record and judicial matters check. ChaufX will cover the cost of this verification. There is no charge to you. ${params.note} English: ${tritonCriminalCheckEnglishUrl} French: ${tritonCriminalCheckFrenchUrl}\n\nRegards,\nChaufX Team`
   };
 }
 
@@ -373,7 +376,10 @@ adminRoutes.get(
     const applications = await prisma.driverApplication.findMany({
       include: {
         documents: true,
-        user: true
+        user: true,
+        reviewHistory: {
+          orderBy: { createdAt: "asc" }
+        }
       },
       orderBy: {
         createdAt: "desc"
@@ -424,6 +430,19 @@ adminRoutes.post(
           applicantResponse: additionalInfo ? null : application.applicantResponse,
           reviewedByUserId: request.auth!.userId,
           reviewedAt: new Date()
+        }
+      });
+
+      await tx.driverApplicationReviewHistory.create({
+        data: {
+          applicationId: application.id,
+          author: DriverApplicationReviewAuthor.ADMIN,
+          event: additionalInfo
+            ? DriverApplicationReviewEvent.ADDITIONAL_INFORMATION_REQUESTED
+            : approved
+              ? DriverApplicationReviewEvent.APPROVED
+              : DriverApplicationReviewEvent.REJECTED,
+          note: input.note
         }
       });
 
@@ -574,6 +593,15 @@ adminRoutes.post(
           criminalCheckInvitedByUserId: request.auth!.userId,
           reviewedByUserId: request.auth!.userId,
           reviewedAt: invitedAt
+        }
+      });
+
+      await tx.driverApplicationReviewHistory.create({
+        data: {
+          applicationId: application.id,
+          author: DriverApplicationReviewAuthor.ADMIN,
+          event: DriverApplicationReviewEvent.CRIMINAL_CHECK_SENT,
+          note: input.comment
         }
       });
 

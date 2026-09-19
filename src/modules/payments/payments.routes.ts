@@ -10,6 +10,9 @@ import { dispatchBookingToEligibleDrivers } from "../bookings/booking.service.js
 
 export const paymentsRoutes = Router();
 
+const bookingInteracRecipientEmail = "payments@chaufx.ca";
+const bookingInteracInstructionsTtlMs = 15 * 60 * 1000;
+
 type StripeCheckoutSession = {
   id: string;
   url: string | null;
@@ -118,6 +121,34 @@ async function retrieveStripeCheckoutSession(sessionId: string) {
   }
 
   return payload as StripeCheckoutSession;
+}
+
+export async function expireStripeCheckoutSession(sessionId: string) {
+  if (!env.STRIPE_SECRET_KEY || !sessionId.startsWith("cs_")) {
+    return;
+  }
+
+  const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${sessionId}/expire`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`
+    }
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  const payload = await response.json();
+  if (payload?.error?.code === "checkout_session_expired") {
+    return;
+  }
+
+  throw new AppError(
+    payload?.error?.message ?? "Unable to cancel the Stripe checkout session right now.",
+    502,
+    "PAYMENT_PROVIDER_ERROR"
+  );
 }
 
 async function getCustomerOwnedBooking(bookingId: string, userId: string) {
@@ -236,34 +267,7 @@ export const paymentCheckoutCancelHandler = asyncHandler(async (request, respons
   });
   const input = schema.parse(request.query);
 
-  const booking = await prisma.booking.findUnique({
-    where: { id: input.bookingId },
-    include: {
-      customer: {
-        include: {
-          user: true
-        }
-      },
-      payment: true
-    }
-  });
-
-  if (
-    booking &&
-    (booking.status === BookingStatus.AWAITING_PAYMENT || booking.status === BookingStatus.PENDING) &&
-    !booking.assignedDriverId
-  ) {
-    if (!booking.payment || booking.payment.status !== PaymentStatus.RECORDED) {
-      await prisma.booking.update({
-        where: { id: booking.id },
-        data: {
-          status: BookingStatus.CANCELLED
-        }
-      });
-    }
-  }
-
-  const fallbackUrl = `${getCheckoutBaseUrl()}/payment-cancelled?bookingId=${input.bookingId}`;
+  const fallbackUrl = `${getCheckoutBaseUrl()}/customer#awaiting-payment`;
   const redirectUrl = input.return_url ? new URL(input.return_url) : new URL(fallbackUrl);
   redirectUrl.searchParams.set("bookingId", input.bookingId);
 
@@ -271,6 +275,36 @@ export const paymentCheckoutCancelHandler = asyncHandler(async (request, respons
 });
 
 paymentsRoutes.use(requireAuth);
+
+paymentsRoutes.get(
+  "/admin/payments/interac",
+  requireRole(["admin"]),
+  asyncHandler(async (_request, response) => {
+    const payments = await prisma.payment.findMany({
+      where: {
+        providerReference: {
+          startsWith: "CHX-TRIP-"
+        }
+      },
+      include: {
+        booking: {
+          include: {
+            customer: {
+              include: {
+                user: true
+              }
+            }
+          }
+        }
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+
+    response.json({ payments });
+  })
+);
 
 paymentsRoutes.get(
   "/payments/:bookingId",
@@ -357,6 +391,100 @@ paymentsRoutes.post(
       checkoutUrl: session.url,
       sessionId: session.id,
       payment
+    });
+  })
+);
+
+paymentsRoutes.post(
+  "/payments/:bookingId/interac-instructions",
+  requireRole(["customer"]),
+  asyncHandler(async (request, response) => {
+    const bookingId = paramValue(request.params.bookingId);
+    const booking = await getCustomerOwnedBooking(bookingId, request.auth!.userId);
+
+    if (!['AWAITING_PAYMENT', 'PENDING'].includes(String(booking.status))) {
+      throw new AppError("Payment is not available for this booking right now.", 409, "PAYMENT_NOT_READY");
+    }
+
+    if (booking.payment?.status === PaymentStatus.RECORDED) {
+      response.json({ alreadyPaid: true, payment: booking.payment });
+      return;
+    }
+
+    const now = new Date();
+    const reference = `CHX-TRIP-${booking.id.replace(/-/g, "").slice(-10).toUpperCase()}`;
+    const hasActiveInstructions =
+      booking.payment?.status === PaymentStatus.PENDING &&
+      booking.payment.providerReference === reference &&
+      booking.payment.interacInstructionsExpiresAt &&
+      booking.payment.interacInstructionsExpiresAt > now;
+    const expiresAt = hasActiveInstructions
+      ? booking.payment!.interacInstructionsExpiresAt!
+      : new Date(now.getTime() + bookingInteracInstructionsTtlMs);
+    const payment = await prisma.payment.upsert({
+      where: { bookingId: booking.id },
+      create: {
+        bookingId: booking.id,
+        amount: booking.fareEstimate,
+        currency: "CAD",
+        status: PaymentStatus.PENDING,
+        providerReference: reference,
+        interacInstructionsExpiresAt: expiresAt,
+        interacTransferConfirmedAt: null,
+        notes: "Interac e-transfer payment requested."
+      },
+      update: {
+        amount: booking.fareEstimate,
+        currency: "CAD",
+        status: PaymentStatus.PENDING,
+        providerReference: reference,
+        interacInstructionsExpiresAt: expiresAt,
+        interacTransferConfirmedAt: hasActiveInstructions ? booking.payment!.interacTransferConfirmedAt : null,
+        notes: "Interac e-transfer payment requested."
+      }
+    });
+
+    response.status(201).json({
+      payment,
+      instructions: {
+        recipientEmail: bookingInteracRecipientEmail,
+        reference,
+        amount: payment.amount,
+        currency: payment.currency,
+        expiresAt: payment.interacInstructionsExpiresAt
+      }
+    });
+  })
+);
+
+paymentsRoutes.post(
+  "/payments/:bookingId/interac-confirmation",
+  requireRole(["customer"]),
+  asyncHandler(async (request, response) => {
+    const bookingId = paramValue(request.params.bookingId);
+    const booking = await getCustomerOwnedBooking(bookingId, request.auth!.userId);
+    const payment = booking.payment;
+
+    if (!payment || payment.status !== PaymentStatus.PENDING || !payment.interacInstructionsExpiresAt) {
+      throw new AppError("Create e-transfer instructions before confirming payment.", 409, "INTERAC_INSTRUCTIONS_REQUIRED");
+    }
+
+    if (payment.interacInstructionsExpiresAt <= new Date()) {
+      throw new AppError("These e-transfer details have expired. Create new details to continue.", 409, "INTERAC_INSTRUCTIONS_EXPIRED");
+    }
+
+    const updated = await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        interacTransferConfirmedAt: payment.interacTransferConfirmedAt ?? new Date(),
+        notes: "Customer confirmed the Interac e-transfer. Awaiting admin payment confirmation."
+      }
+    });
+
+    response.json({
+      payment: updated,
+      bookingStatus: booking.status,
+      message: "Booking submitted. Awaiting ChaufX payment confirmation before driver routing."
     });
   })
 );

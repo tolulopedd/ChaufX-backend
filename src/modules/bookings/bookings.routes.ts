@@ -10,10 +10,13 @@ import {
   createBookingRecord,
   driverHasOverlap,
   ensureCustomerCanCancel,
+  findMatchingAwaitingPaymentBooking,
   resolveBookingPricing
 } from "./booking.service.js";
 import { createAuditLog } from "../../lib/audit.js";
 import { notifyUser, notifyUsers } from "../../lib/notifications.js";
+import { isEligibleCustomerAge } from "../../lib/customer-age.js";
+import { expireStripeCheckoutSession } from "../payments/payments.routes.js";
 
 export const createBookingSchema = z.object({
   vehicleId: z.string().uuid().optional(),
@@ -106,10 +109,21 @@ function toDriverBookingResponse(booking: any) {
 }
 
 export function hasCompleteCustomerBookingProfile(user: any) {
+  return incompleteCustomerBookingFields(user).length === 0;
+}
+
+export function incompleteCustomerBookingFields(user: any) {
   const vehicle = user.customerProfile?.vehicles[0];
   const hasCompleteVehicle = Boolean(vehicle?.make && vehicle?.model && vehicle?.plateNumber && vehicle?.registrationProvince);
+  const missing: string[] = [];
 
-  return Boolean(user.emailVerifiedAt && user.phone && user.customerProfile?.identityDocument && hasCompleteVehicle);
+  if (!user.emailVerifiedAt) missing.push("Verify your email");
+  if (!user.phone) missing.push("Add a mobile phone number");
+  if (!isEligibleCustomerAge(user.customerProfile?.dateOfBirth)) missing.push("Add an eligible date of birth");
+  if (!user.customerProfile?.identityDocument) missing.push("Upload a government-issued photo ID");
+  if (!hasCompleteVehicle) missing.push("Complete your vehicle details");
+
+  return missing;
 }
 
 async function ensureCustomerCanBook(userId: string) {
@@ -120,9 +134,10 @@ async function ensureCustomerCanBook(userId: string) {
       phone: true,
       customerProfile: {
         select: {
+          dateOfBirth: true,
           identityDocument: { select: { id: true } },
           vehicles: {
-            where: { isPrimary: true },
+            orderBy: [{ isPrimary: "desc" }, { updatedAt: "desc" }],
             select: {
               make: true,
               model: true,
@@ -135,9 +150,10 @@ async function ensureCustomerCanBook(userId: string) {
       }
     }
   });
-  if (!hasCompleteCustomerBookingProfile(user)) {
+  const incompleteFields = incompleteCustomerBookingFields(user);
+  if (incompleteFields.length > 0) {
     throw new AppError(
-      "Complete your Account details before booking.",
+      `${incompleteFields.join(". ")}. Complete this before booking.`,
       403,
       "CUSTOMER_VERIFICATION_REQUIRED"
     );
@@ -173,6 +189,8 @@ bookingsRoutes.post(
       pricingCity: pricing.city,
       pricingMembershipTier: pricing.membershipTier,
       membershipApplied: pricing.membershipApplied,
+      baseFareEstimate: pricing.baseFareEstimate,
+      membershipSavings: pricing.membershipSavings,
       activationWindowStartAt: activationWindow.startsAt.toISOString(),
       activationWindowEndAt: activationWindow.endsAt.toISOString(),
       pricingNote: `All rates are billed in CAD. ${pricing.billableHours} hour${pricing.billableHours === 1 ? "" : "s"} billed at $${pricing.flatFee}/hour ${pricingRateLabel}. No surge pricing is applied after booking confirmation.`
@@ -192,6 +210,28 @@ bookingsRoutes.post(
       where: { userId: request.auth!.userId }
     });
 
+    const pricing = await resolveBookingPricing({
+      zoneCode: input.zoneCode,
+      expectedDurationMinutes: input.expectedDurationMinutes,
+      customerUserId: request.auth!.userId,
+      pickupLocation: input.pickupLocation,
+      destinationLocation: input.destinationLocation,
+      pickupLat: input.pickupLat,
+      pickupLng: input.pickupLng
+    });
+    const existingBooking = await findMatchingAwaitingPaymentBooking({
+      customerId: customer.id,
+      ...input
+    });
+
+    if (existingBooking && Math.abs(Number(existingBooking.fareEstimate) - pricing.fareEstimate) < 0.005) {
+      response.json({
+        booking: existingBooking,
+        reusedPendingBooking: true
+      });
+      return;
+    }
+
     const booking = await createBookingRecord({
       customerId: customer.id,
       customerUserId: request.auth!.userId,
@@ -202,7 +242,7 @@ bookingsRoutes.post(
       userId: request.auth!.userId,
       type: "BOOKING_SUBMITTED",
       title: "Payment required",
-      body: "Your booking has been created. Complete Stripe payment before driver matching can begin.",
+      body: "Your booking has been created. Complete payment before driver matching can begin.",
       channel: "IN_APP",
       meta: {
         bookingId: booking.id,
@@ -564,36 +604,55 @@ bookingsRoutes.post(
     const currentBooking = await prisma.booking.findUniqueOrThrow({
       where: { id: bookingId },
       include: {
-        trip: true
+        trip: true,
+        payment: true
       }
     });
 
-    const booking = await prisma.booking.update({
-      where: { id: bookingId },
-      data: {
-        status: BookingStatus.CANCELLED,
-        cancelledAt: new Date(),
-        trip: currentBooking.trip
-          ? {
-              update: {
-                status: "CANCELLED",
-                liveTrackingEnabled: false,
-                navigationEnabled: false
+    if (currentBooking.payment?.status === "PENDING" && currentBooking.payment.providerReference) {
+      await expireStripeCheckoutSession(currentBooking.payment.providerReference);
+    }
+
+    const booking = await prisma.$transaction(async (tx) => {
+      const cancelledBooking = await tx.booking.update({
+        where: { id: bookingId },
+        data: {
+          status: BookingStatus.CANCELLED,
+          cancelledAt: new Date(),
+          trip: currentBooking.trip
+            ? {
+                update: {
+                  status: "CANCELLED",
+                  liveTrackingEnabled: false,
+                  navigationEnabled: false
+                }
               }
-            }
-          : undefined
-      }
-    });
+            : undefined
+        }
+      });
 
-    await prisma.bookingDispatch.updateMany({
-      where: {
-        bookingId,
-        status: BookingDispatchStatus.PENDING
-      },
-      data: {
-        status: BookingDispatchStatus.EXPIRED,
-        respondedAt: new Date()
+      await tx.bookingDispatch.updateMany({
+        where: {
+          bookingId,
+          status: BookingDispatchStatus.PENDING
+        },
+        data: {
+          status: BookingDispatchStatus.EXPIRED,
+          respondedAt: new Date()
+        }
+      });
+
+      if (currentBooking.payment?.status === "PENDING") {
+        await tx.payment.update({
+          where: { bookingId },
+          data: {
+            status: "FAILED",
+            notes: "Payment cancelled by customer."
+          }
+        });
       }
+
+      return cancelledBooking;
     });
 
     response.json(booking);

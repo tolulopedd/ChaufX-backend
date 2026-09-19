@@ -1,4 +1,4 @@
-import { BookingDispatchStatus, BookingStatus } from "@prisma/client";
+import { BookingDispatchStatus, BookingStatus, PaymentStatus } from "@prisma/client";
 import { appConfig, buildActivationWindow, isTripWindowActive } from "../../lib/app-config.js";
 import { AppError } from "../../common/AppError.js";
 import { prisma } from "../../lib/prisma.js";
@@ -285,14 +285,16 @@ export async function resolveBookingPricing(params: {
 
     if (customerUser) {
       membershipTier = customerUser.membershipTier;
-      membershipFlatFee = getActiveMembershipHourlyRate(customerUser);
+      membershipFlatFee = await getActiveMembershipHourlyRate(customerUser);
     }
   }
 
   const flatFee = membershipFlatFee ?? regionalFlatFee;
   const requestedHours = Math.max(1, Math.ceil(params.expectedDurationMinutes / 60));
   const billableHours = Math.max(requestedHours, minHours);
+  const baseFareEstimate = Number((regionalFlatFee * billableHours).toFixed(2));
   const fareEstimate = Number((flatFee * billableHours).toFixed(2));
+  const membershipSavings = membershipFlatFee !== null ? Number(Math.max(0, baseFareEstimate - fareEstimate).toFixed(2)) : 0;
 
   return {
     province: region.province,
@@ -304,7 +306,9 @@ export async function resolveBookingPricing(params: {
     minHours,
     requestedHours,
     billableHours,
-    fareEstimate
+    fareEstimate,
+    baseFareEstimate,
+    membershipSavings
   };
 }
 
@@ -534,6 +538,64 @@ export async function createBookingRecord(input: {
   });
 
   return booking;
+}
+
+function normalizeBookingText(value?: string | null) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+export async function findMatchingAwaitingPaymentBooking(input: {
+  customerId: string;
+  vehicleId?: string;
+  requestType: "NOW" | "LATER";
+  pickupLocation: string;
+  pickupLat: number;
+  pickupLng: number;
+  destinationLocation: string;
+  destinationLat: number;
+  destinationLng: number;
+  scheduledStartAt: Date;
+  expectedDurationMinutes: number;
+  specialNotes?: string;
+  vehicleDetails?: string;
+  zoneCode: string;
+}) {
+  const candidates = await prisma.booking.findMany({
+    where: {
+      customerId: input.customerId,
+      vehicleId: input.vehicleId ?? null,
+      requestType: input.requestType,
+      scheduledStartAt: input.scheduledStartAt,
+      expectedDurationMinutes: input.expectedDurationMinutes,
+      status: BookingStatus.AWAITING_PAYMENT
+    },
+    include: {
+      payment: true
+    },
+    orderBy: {
+      updatedAt: "desc"
+    }
+  });
+
+  return candidates.find((booking) => {
+    const paymentCanContinue = !booking.payment || booking.payment.status === PaymentStatus.PENDING;
+
+    return (
+      paymentCanContinue &&
+      normalizeBookingText(booking.pickupLocation) === normalizeBookingText(input.pickupLocation) &&
+      normalizeBookingText(booking.destinationLocation) === normalizeBookingText(input.destinationLocation) &&
+      Math.abs(Number(booking.pickupLat) - input.pickupLat) < 0.00001 &&
+      Math.abs(Number(booking.pickupLng) - input.pickupLng) < 0.00001 &&
+      Math.abs(Number(booking.destinationLat) - input.destinationLat) < 0.00001 &&
+      Math.abs(Number(booking.destinationLng) - input.destinationLng) < 0.00001 &&
+      normalizeBookingText(booking.specialNotes) === normalizeBookingText(input.specialNotes) &&
+      normalizeBookingText(booking.vehicleDetails) === normalizeBookingText(input.vehicleDetails) &&
+      booking.zoneCode === input.zoneCode
+    );
+  });
 }
 
 export async function dispatchBookingToEligibleDrivers(bookingId: string) {

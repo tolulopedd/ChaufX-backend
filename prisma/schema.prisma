@@ -32,6 +32,19 @@ enum DriverApplicationStatus {
   REJECTED
 }
 
+enum DriverApplicationReviewAuthor {
+  ADMIN
+  DRIVER
+}
+
+enum DriverApplicationReviewEvent {
+  ADDITIONAL_INFORMATION_REQUESTED
+  APPLICATION_RESUBMITTED
+  APPROVED
+  REJECTED
+  CRIMINAL_CHECK_SENT
+}
+
 enum BookingStatus {
   AWAITING_PAYMENT
   PENDING
@@ -203,21 +216,23 @@ model BlogPost {
 }
 
 model MembershipPayment {
-  id              String                  @id @default(uuid())
-  userId          String
-  tier            MembershipTier
-  billingCycle    MembershipBillingCycle
-  method          MembershipPaymentMethod
-  status          MembershipPaymentStatus @default(PENDING)
-  amount          Float
-  currency        String                  @default("CAD")
-  invoiceNumber   String                  @unique
-  stripeSessionId String?                 @unique
-  interacEmail    String?
-  recordedAt      DateTime?
-  notes           String?
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  id                           String                  @id @default(uuid())
+  userId                       String
+  tier                         MembershipTier
+  billingCycle                 MembershipBillingCycle
+  method                       MembershipPaymentMethod
+  status                       MembershipPaymentStatus @default(PENDING)
+  amount                       Float
+  currency                     String                  @default("CAD")
+  invoiceNumber                String                  @unique
+  stripeSessionId              String?                 @unique
+  interacEmail                 String?
+  interacInstructionsExpiresAt DateTime?
+  interacTransferConfirmedAt   DateTime?
+  recordedAt                   DateTime?
+  notes                        String?
+  createdAt                    DateTime                @default(now())
+  updatedAt                    DateTime                @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -280,6 +295,7 @@ model CustomerProfile {
   primaryAddress                  String?
   emergencyContactName            String?
   emergencyContactPhone           String?
+  emergencyContactEmail           String?
   vehicleRegistrationProvince     String?
   vehicleComplianceConfirmedAt    DateTime?
   termsAcceptedAt                 DateTime?
@@ -337,33 +353,47 @@ model AdminUser {
 }
 
 model DriverApplication {
-  id                    String                  @id @default(uuid())
-  userId                String                  @unique
-  fullName              String
-  phone                 String
-  email                 String
-  address               String
-  licenseNumber         String
-  yearsOfExperience     Int
-  emergencyContact      String
-  preferredServiceAreas String[]
-  availabilitySchedule  String?
-  status                DriverApplicationStatus @default(SUBMITTED)
-  reviewNote            String?
-  applicantResponse     String?
-  backgroundCheckComment String?
-  driverAbstractInitiatedAt DateTime?
-  criminalCheckInvitedAt DateTime?
+  id                           String                  @id @default(uuid())
+  userId                       String                  @unique
+  fullName                     String
+  phone                        String
+  email                        String
+  address                      String
+  licenseNumber                String
+  yearsOfExperience            Int
+  emergencyContact             String
+  preferredServiceAreas        String[]
+  availabilitySchedule         String?
+  status                       DriverApplicationStatus @default(SUBMITTED)
+  reviewNote                   String?
+  applicantResponse            String?
+  backgroundCheckComment       String?
+  driverAbstractInitiatedAt    DateTime?
+  criminalCheckInvitedAt       DateTime?
   criminalCheckInvitedByUserId String?
-  reviewedByUserId      String?
-  reviewedAt            DateTime?
-  createdAt             DateTime                @default(now())
-  updatedAt             DateTime                @updatedAt
+  reviewedByUserId             String?
+  reviewedAt                   DateTime?
+  createdAt                    DateTime                @default(now())
+  updatedAt                    DateTime                @updatedAt
 
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reviewedBy User?      @relation("ApplicationReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
-  documents  Document[]
-  driver     Driver?
+  user          User                             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy    User?                            @relation("ApplicationReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  documents     Document[]
+  driver        Driver?
+  reviewHistory DriverApplicationReviewHistory[]
+}
+
+model DriverApplicationReviewHistory {
+  id            String                        @id @default(uuid())
+  applicationId String
+  author        DriverApplicationReviewAuthor
+  event         DriverApplicationReviewEvent
+  note          String
+  createdAt     DateTime                      @default(now())
+
+  application DriverApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId, createdAt])
 }
 
 model Vehicle {
@@ -497,6 +527,8 @@ model Payment {
   currency          String        @default("USD")
   status            PaymentStatus @default(PENDING)
   providerReference String?
+  interacInstructionsExpiresAt DateTime?
+  interacTransferConfirmedAt   DateTime?
   recordedAt        DateTime?
   notes             String?
   createdAt         DateTime      @default(now())

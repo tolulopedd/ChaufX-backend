@@ -4,6 +4,8 @@ import { asyncHandler } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { persistCustomerIdentityDocument } from "../../lib/document-storage.js";
+import { AppError } from "../../common/AppError.js";
+import { isEligibleCustomerAge } from "../../lib/customer-age.js";
 
 export const usersRoutes = Router();
 
@@ -96,6 +98,7 @@ usersRoutes.patch(
       primaryAddress: z.string().trim().min(5).max(300).optional(),
       emergencyContactName: z.string().trim().min(2).max(120).optional(),
       emergencyContactPhone: z.string().trim().min(7).max(32).optional(),
+      emergencyContactEmail: z.string().trim().email().max(320).optional(),
       vehicle: z
         .object({
           make: z.string().trim().min(2).max(80),
@@ -120,6 +123,10 @@ usersRoutes.patch(
     const input = schema.parse(request.body);
     const now = new Date();
 
+    if (input.dateOfBirth && !isEligibleCustomerAge(input.dateOfBirth, now)) {
+      throw new AppError("You must be 18 or older to use ChaufX.", 400, "CUSTOMER_MINIMUM_AGE_REQUIRED");
+    }
+
     if (input.phone) {
       await prisma.user.update({
         where: { id: request.auth!.userId },
@@ -136,6 +143,7 @@ usersRoutes.patch(
         primaryAddress: input.primaryAddress,
         emergencyContactName: input.emergencyContactName,
         emergencyContactPhone: input.emergencyContactPhone,
+        emergencyContactEmail: input.emergencyContactEmail,
         vehicleRegistrationProvince: input.vehicle?.registrationProvince,
         vehicleComplianceConfirmedAt: input.vehicleComplianceConfirmed === true ? now : undefined,
         termsAcceptedAt: input.termsAccepted === true ? now : undefined,
@@ -148,6 +156,7 @@ usersRoutes.patch(
         primaryAddress: input.primaryAddress,
         emergencyContactName: input.emergencyContactName,
         emergencyContactPhone: input.emergencyContactPhone,
+        emergencyContactEmail: input.emergencyContactEmail,
         vehicleRegistrationProvince: input.vehicle?.registrationProvince,
         vehicleComplianceConfirmedAt:
           input.vehicleComplianceConfirmed === undefined ? undefined : input.vehicleComplianceConfirmed ? now : null,
@@ -247,11 +256,13 @@ usersRoutes.post(
   requireRole(["customer"]),
   asyncHandler(async (request, response) => {
     const schema = z.object({
-      make: z.string().min(2),
-      model: z.string().min(1),
-      plateNumber: z.string().min(3),
-      color: z.string().optional(),
-      notes: z.string().optional()
+      make: z.string().trim().min(2).max(80),
+      model: z.string().trim().min(1).max(80),
+      plateNumber: z.string().trim().min(3).max(24),
+      registrationProvince: z.string().trim().min(2).max(80).optional(),
+      color: z.string().trim().max(80).optional(),
+      notes: z.string().trim().max(500).optional(),
+      isPrimary: z.boolean().optional()
     });
     const input = schema.parse(request.body);
 
@@ -261,13 +272,117 @@ usersRoutes.post(
       }
     });
 
-    const vehicle = await prisma.vehicle.create({
-      data: {
-        customerId: customer.id,
-        ...input
+    const vehicle = await prisma.$transaction(async (tx) => {
+      const shouldBePrimary = input.isPrimary ?? (await tx.vehicle.count({ where: { customerId: customer.id } })) === 0;
+
+      if (shouldBePrimary) {
+        await tx.vehicle.updateMany({
+          where: { customerId: customer.id },
+          data: { isPrimary: false }
+        });
       }
+
+      return tx.vehicle.create({
+        data: {
+          customerId: customer.id,
+          ...input,
+          isPrimary: shouldBePrimary
+        }
+      });
     });
 
     response.status(201).json(vehicle);
+  })
+);
+
+usersRoutes.patch(
+  "/users/me/vehicles/:vehicleId",
+  requireRole(["customer"]),
+  asyncHandler(async (request, response) => {
+    const schema = z.object({
+      make: z.string().trim().min(2).max(80).optional(),
+      model: z.string().trim().min(1).max(80).optional(),
+      plateNumber: z.string().trim().min(3).max(24).optional(),
+      registrationProvince: z.string().trim().min(2).max(80).nullable().optional(),
+      color: z.string().trim().max(80).nullable().optional(),
+      notes: z.string().trim().max(500).nullable().optional(),
+      isPrimary: z.boolean().optional()
+    });
+    const input = schema.parse(request.body);
+    const vehicleId = String(request.params.vehicleId ?? "");
+    const vehicle = await prisma.vehicle.findFirst({
+      where: {
+        id: vehicleId,
+        customer: { userId: request.auth!.userId }
+      }
+    });
+
+    if (!vehicle) {
+      throw new AppError("Vehicle not found.", 404, "VEHICLE_NOT_FOUND");
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const hasPrimaryVehicle = await tx.vehicle.findFirst({
+        where: { customerId: vehicle.customerId, isPrimary: true },
+        select: { id: true }
+      });
+      const shouldBePrimary = input.isPrimary === true || !hasPrimaryVehicle;
+
+      if (shouldBePrimary) {
+        await tx.vehicle.updateMany({
+          where: { customerId: vehicle.customerId, id: { not: vehicle.id } },
+          data: { isPrimary: false }
+        });
+      }
+
+      const { isPrimary, ...vehicleData } = input;
+      return tx.vehicle.update({
+        where: { id: vehicle.id },
+        data: {
+          ...vehicleData,
+          ...(shouldBePrimary ? { isPrimary: true } : {})
+        }
+      });
+    });
+
+    response.json(updated);
+  })
+);
+
+usersRoutes.delete(
+  "/users/me/vehicles/:vehicleId",
+  requireRole(["customer"]),
+  asyncHandler(async (request, response) => {
+    const vehicleId = String(request.params.vehicleId ?? "");
+    const vehicle = await prisma.vehicle.findFirst({
+      where: {
+        id: vehicleId,
+        customer: { userId: request.auth!.userId }
+      }
+    });
+
+    if (!vehicle) {
+      throw new AppError("Vehicle not found.", 404, "VEHICLE_NOT_FOUND");
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.vehicle.delete({ where: { id: vehicle.id } });
+
+      if (vehicle.isPrimary) {
+        const replacement = await tx.vehicle.findFirst({
+          where: { customerId: vehicle.customerId },
+          orderBy: { updatedAt: "desc" }
+        });
+
+        if (replacement) {
+          await tx.vehicle.update({
+            where: { id: replacement.id },
+            data: { isPrimary: true }
+          });
+        }
+      }
+    });
+
+    response.status(204).send();
   })
 );

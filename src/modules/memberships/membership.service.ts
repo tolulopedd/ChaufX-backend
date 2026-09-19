@@ -40,12 +40,86 @@ export const membershipPlans = {
   }
 } as const;
 
+const membershipPricingPrefix = "MEMBERSHIP::";
+
+type MembershipPlan = {
+  tier: MembershipTier;
+  label: string;
+  hourlyRate: number | null;
+  monthlyFee: number | null;
+  annualFee: number | null;
+};
+
+function membershipPricingCode(tier: MembershipTier, kind: "HOURLY_RATE" | "MONTHLY_FEE" | "ANNUAL_FEE") {
+  return `${membershipPricingPrefix}${tier}::${kind}`;
+}
+
+export async function getConfiguredMembershipPlans(): Promise<Record<MembershipTier, MembershipPlan>> {
+  const settings = await prisma.pricingSetting.findMany({
+    where: { code: { startsWith: membershipPricingPrefix } },
+    select: { code: true, value: true }
+  });
+  const plans: Record<MembershipTier, MembershipPlan> = {
+    BASIC: { ...membershipPlans.BASIC },
+    PLUS: { ...membershipPlans.PLUS },
+    CONCIERGE: { ...membershipPlans.CONCIERGE },
+    CORPORATE: { ...membershipPlans.CORPORATE }
+  };
+
+  for (const setting of settings) {
+    const [, tier, kind] = setting.code.split("::");
+    if (tier !== MembershipTier.PLUS && tier !== MembershipTier.CONCIERGE) {
+      continue;
+    }
+
+    if (kind === "HOURLY_RATE") {
+      plans[tier].hourlyRate = setting.value;
+    }
+
+    if (kind === "MONTHLY_FEE") {
+      plans[tier].monthlyFee = setting.value;
+    }
+
+    if (kind === "ANNUAL_FEE") {
+      plans[tier].annualFee = setting.value;
+    }
+  }
+
+  return plans;
+}
+
+export function membershipPricingSettingsForPlans(plans: Pick<Record<MembershipTier, MembershipPlan>, "PLUS" | "CONCIERGE">) {
+  return [MembershipTier.PLUS, MembershipTier.CONCIERGE].flatMap((tier) => {
+    const plan = plans[tier];
+    return [
+      {
+        code: membershipPricingCode(tier, "HOURLY_RATE"),
+        name: `${plan.label} membership hourly rate`,
+        value: plan.hourlyRate ?? 0,
+        description: `${plan.label} member hourly rate.`
+      },
+      {
+        code: membershipPricingCode(tier, "MONTHLY_FEE"),
+        name: `${plan.label} monthly membership fee`,
+        value: plan.monthlyFee ?? 0,
+        description: `${plan.label} monthly membership fee.`
+      },
+      {
+        code: membershipPricingCode(tier, "ANNUAL_FEE"),
+        name: `${plan.label} annual membership fee`,
+        value: plan.annualFee ?? 0,
+        description: `${plan.label} annual membership fee.`
+      }
+    ];
+  });
+}
+
 export function getMembershipPlan(tier: MembershipTier) {
   return membershipPlans[tier];
 }
 
-export function getMembershipFee(tier: MembershipTier, billingCycle: MembershipBillingCycle) {
-  const plan = getMembershipPlan(tier);
+export async function getMembershipFee(tier: MembershipTier, billingCycle: MembershipBillingCycle) {
+  const plan = (await getConfiguredMembershipPlans())[tier];
 
   if (tier !== MembershipTier.PLUS && tier !== MembershipTier.CONCIERGE) {
     throw new AppError("This membership tier is not available for self-service activation.", 400, "MEMBERSHIP_TIER_UNAVAILABLE");
@@ -62,7 +136,7 @@ export function getMembershipFee(tier: MembershipTier, billingCycle: MembershipB
   throw new AppError("Choose monthly or annual billing for this membership.", 400, "MEMBERSHIP_BILLING_INVALID");
 }
 
-export function getActiveMembershipHourlyRate(
+export async function getActiveMembershipHourlyRate(
   user: Pick<User, "membershipTier" | "membershipStatus" | "membershipHourlyRate">
 ) {
   if (user.membershipStatus !== MembershipStatus.ACTIVE) {
@@ -70,11 +144,11 @@ export function getActiveMembershipHourlyRate(
   }
 
   if (user.membershipTier === MembershipTier.PLUS) {
-    return membershipPlans.PLUS.hourlyRate;
+    return (await getConfiguredMembershipPlans()).PLUS.hourlyRate;
   }
 
   if (user.membershipTier === MembershipTier.CONCIERGE) {
-    return membershipPlans.CONCIERGE.hourlyRate;
+    return (await getConfiguredMembershipPlans()).CONCIERGE.hourlyRate;
   }
 
   if (user.membershipTier === MembershipTier.CORPORATE) {
@@ -91,16 +165,22 @@ export function createMembershipInvoiceNumber() {
   return `CHX-MEM-${datePart}-${randomPart}`;
 }
 
-function getMembershipExpiresAt(start: Date, billingCycle: MembershipBillingCycle) {
+export function getMembershipExpiresAt(start: Date, billingCycle: MembershipBillingCycle) {
   const expiresAt = new Date(start);
+  const originalDay = start.getDate();
+
+  // Set the day after changing the period so month-end dates stay in the next billing period.
+  expiresAt.setDate(1);
 
   if (billingCycle === MembershipBillingCycle.MONTHLY) {
     expiresAt.setMonth(expiresAt.getMonth() + 1);
+    expiresAt.setDate(Math.min(originalDay, new Date(expiresAt.getFullYear(), expiresAt.getMonth() + 1, 0).getDate()));
     return expiresAt;
   }
 
   if (billingCycle === MembershipBillingCycle.ANNUAL) {
     expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+    expiresAt.setDate(Math.min(originalDay, new Date(expiresAt.getFullYear(), expiresAt.getMonth() + 1, 0).getDate()));
     return expiresAt;
   }
 
@@ -108,6 +188,8 @@ function getMembershipExpiresAt(start: Date, billingCycle: MembershipBillingCycl
 }
 
 export async function activateMembershipPayment(paymentId: string, options?: { stripeSessionId?: string | null }) {
+  const configuredPlans = await getConfiguredMembershipPlans();
+
   return prisma.$transaction(async (tx) => {
     const payment = await tx.membershipPayment.findUnique({
       where: { id: paymentId },
@@ -120,7 +202,7 @@ export async function activateMembershipPayment(paymentId: string, options?: { s
       throw new AppError("Membership payment not found.", 404, "MEMBERSHIP_PAYMENT_NOT_FOUND");
     }
 
-    const plan = getMembershipPlan(payment.tier);
+    const plan = configuredPlans[payment.tier];
     const activatedAt = payment.recordedAt ?? new Date();
     const expiresAt = getMembershipExpiresAt(activatedAt, payment.billingCycle);
     const hourlyRate = payment.tier === MembershipTier.CORPORATE ? payment.user.membershipHourlyRate : plan.hourlyRate;
@@ -162,6 +244,8 @@ export function serializeMembershipPayment(payment: MembershipPayment) {
     currency: payment.currency,
     invoiceNumber: payment.invoiceNumber,
     interacEmail: payment.interacEmail,
+    interacInstructionsExpiresAt: payment.interacInstructionsExpiresAt?.toISOString() ?? null,
+    interacTransferConfirmedAt: payment.interacTransferConfirmedAt?.toISOString() ?? null,
     recordedAt: payment.recordedAt?.toISOString() ?? null,
     createdAt: payment.createdAt.toISOString()
   };

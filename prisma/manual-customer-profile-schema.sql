@@ -3,6 +3,7 @@ ALTER TABLE "CustomerProfile"
   ADD COLUMN IF NOT EXISTS "primaryAddress" TEXT,
   ADD COLUMN IF NOT EXISTS "emergencyContactName" TEXT,
   ADD COLUMN IF NOT EXISTS "emergencyContactPhone" TEXT,
+  ADD COLUMN IF NOT EXISTS "emergencyContactEmail" TEXT,
   ADD COLUMN IF NOT EXISTS "vehicleRegistrationProvince" TEXT,
   ADD COLUMN IF NOT EXISTS "vehicleComplianceConfirmedAt" TIMESTAMP(3),
   ADD COLUMN IF NOT EXISTS "termsAcceptedAt" TIMESTAMP(3),
