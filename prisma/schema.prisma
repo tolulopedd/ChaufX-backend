@@ -26,6 +26,7 @@ enum AccountStatus {
 }
 
 enum DriverApplicationStatus {
+  AWAITING_DRIVER_ABSTRACT
   SUBMITTED
   UNDER_REVIEW
   APPROVED
@@ -38,6 +39,7 @@ enum DriverApplicationReviewAuthor {
 }
 
 enum DriverApplicationReviewEvent {
+  DRIVER_ABSTRACT_SUBMITTED
   ADDITIONAL_INFORMATION_REQUESTED
   APPLICATION_RESUBMITTED
   APPROVED
@@ -151,6 +153,7 @@ enum EmailVerificationPurpose {
   CUSTOMER_SIGNUP
   DRIVER_ONBOARDING
   DRIVER_APPLICATION_UPDATE
+  DRIVER_ABSTRACT_SUBMISSION
 }
 
 enum DocumentType {
@@ -369,6 +372,8 @@ model DriverApplication {
   applicantResponse            String?
   backgroundCheckComment       String?
   driverAbstractInitiatedAt    DateTime?
+  driverAbstractCandidateConfirmedAt DateTime?
+  driverAbstractReminderSentAt DateTime?
   criminalCheckInvitedAt       DateTime?
   criminalCheckInvitedByUserId String?
   reviewedByUserId             String?

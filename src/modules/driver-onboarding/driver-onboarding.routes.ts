@@ -16,6 +16,9 @@ import { persistDriverApplicationDocument } from "../../lib/document-storage.js"
 import { AppError } from "../../common/AppError.js";
 import {
   consumeEmailVerificationToken,
+  DRIVER_ABSTRACT_SUBMISSION_TTL_MS,
+  issueEmailVerificationToken,
+  requireDriverAbstractSubmissionToken,
   requireDriverApplicationUpdateToken,
   requireVerifiedEmailToken
 } from "../../lib/email-verification.js";
@@ -164,6 +167,7 @@ driverOnboardingRoutes.post(
         emergencyContact: input.emergencyContact ?? "Not provided",
         preferredServiceAreas: input.preferredServiceAreas,
         availabilitySchedule: input.availabilitySchedule,
+        status: "AWAITING_DRIVER_ABSTRACT",
         driverAbstractInitiatedAt: new Date()
       },
       update: {
@@ -176,12 +180,14 @@ driverOnboardingRoutes.post(
         emergencyContact: input.emergencyContact ?? "Not provided",
         preferredServiceAreas: input.preferredServiceAreas,
         availabilitySchedule: input.availabilitySchedule,
-        status: "SUBMITTED",
+        status: applicationUpdate ? "SUBMITTED" : "AWAITING_DRIVER_ABSTRACT",
         reviewNote: applicationUpdate ? undefined : null,
         applicantResponse: applicationUpdate ? input.applicantResponse : null,
         reviewedAt: null,
         backgroundCheckComment: null,
         driverAbstractInitiatedAt: applicationUpdate ? undefined : new Date(),
+        driverAbstractCandidateConfirmedAt: applicationUpdate ? undefined : null,
+        driverAbstractReminderSentAt: applicationUpdate ? undefined : null,
         criminalCheckInvitedAt: applicationUpdate ? undefined : null,
         criminalCheckInvitedByUserId: applicationUpdate ? undefined : null
       },
@@ -249,7 +255,94 @@ driverOnboardingRoutes.post(
       await consumeEmailVerificationToken(applicationUpdate.record.id);
     }
 
-    response.status(201).json(applicationWithDocuments);
+    const driverAbstractToken = applicationUpdate
+      ? null
+      : await issueEmailVerificationToken({
+          email: applicationWithDocuments.email,
+          purpose: EmailVerificationPurpose.DRIVER_ABSTRACT_SUBMISSION,
+          payload: { applicationId: applicationWithDocuments.id },
+          ttlMs: DRIVER_ABSTRACT_SUBMISSION_TTL_MS
+        });
+
+    response.status(201).json({ application: applicationWithDocuments, driverAbstractToken });
+  })
+);
+
+driverOnboardingRoutes.get(
+  "/driver-onboarding/driver-abstract",
+  asyncHandler(async (request, response) => {
+    const query = z.object({ token: z.string().min(20) }).parse({ token: paramValue(request.query.token) });
+    const abstract = await requireDriverAbstractSubmissionToken(query.token);
+    const application = await prisma.driverApplication.findUnique({
+      where: { id: abstract.applicationId },
+      select: { id: true, fullName: true, email: true, status: true }
+    });
+
+    if (!application || application.email.toLowerCase() !== abstract.record.email.toLowerCase()) {
+      throw new AppError("This driver abstract link is invalid.", 400, "INVALID_DRIVER_ABSTRACT_TOKEN");
+    }
+
+    response.json(application);
+  })
+);
+
+driverOnboardingRoutes.post(
+  "/driver-onboarding/driver-abstract/submit",
+  asyncHandler(async (request, response) => {
+    const input = z.object({ token: z.string().min(20), confirmed: z.literal(true) }).parse(request.body);
+    const abstract = await requireDriverAbstractSubmissionToken(input.token);
+    const application = await prisma.driverApplication.findUniqueOrThrow({
+      where: { id: abstract.applicationId },
+      select: { id: true, email: true, userId: true, status: true }
+    });
+
+    if (application.email.toLowerCase() !== abstract.record.email.toLowerCase()) {
+      throw new AppError("This driver abstract link is invalid.", 400, "INVALID_DRIVER_ABSTRACT_TOKEN");
+    }
+
+    if (application.status !== "AWAITING_DRIVER_ABSTRACT") {
+      throw new AppError("This application is not awaiting driver abstract submission.", 409, "DRIVER_ABSTRACT_NOT_PENDING");
+    }
+
+    const submittedAt = new Date();
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedApplication = await tx.driverApplication.update({
+        where: { id: application.id },
+        data: {
+          status: "SUBMITTED",
+          driverAbstractCandidateConfirmedAt: submittedAt,
+          reviewedAt: null,
+          reviewNote: null
+        }
+      });
+
+      await tx.driverApplicationReviewHistory.create({
+        data: {
+          applicationId: application.id,
+          author: DriverApplicationReviewAuthor.DRIVER,
+          event: DriverApplicationReviewEvent.DRIVER_ABSTRACT_SUBMITTED,
+          note: "Driver confirmed completion of the Triton Driver Abstract check."
+        }
+      });
+
+      await tx.user.update({
+        where: { id: application.userId },
+        data: { status: AccountStatus.PENDING_APPROVAL }
+      });
+
+      return updatedApplication;
+    });
+
+    await consumeEmailVerificationToken(abstract.record.id);
+    await createAuditLog({
+      actorId: application.userId,
+      action: "DRIVER_ABSTRACT_SUBMITTED_FOR_REVIEW",
+      entityType: "DriverApplication",
+      entityId: application.id,
+      details: { submittedAt: submittedAt.toISOString() }
+    });
+
+    response.json(updated);
   })
 );
 

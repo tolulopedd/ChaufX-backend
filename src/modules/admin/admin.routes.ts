@@ -26,7 +26,11 @@ import { sendTransactionalEmail } from "../../lib/email.js";
 import { env } from "../../config/env.js";
 import { hashPassword } from "../../lib/auth.js";
 import { DRIVER_WELCOME_PASSWORD_TTL_MS, issuePasswordResetToken } from "../../lib/password-reset.js";
-import { DRIVER_APPLICATION_UPDATE_TTL_MS, issueEmailVerificationToken } from "../../lib/email-verification.js";
+import {
+  DRIVER_ABSTRACT_SUBMISSION_TTL_MS,
+  DRIVER_APPLICATION_UPDATE_TTL_MS,
+  issueEmailVerificationToken
+} from "../../lib/email-verification.js";
 import { EmailVerificationPurpose } from "@prisma/client";
 
 export const adminRoutes = Router();
@@ -203,6 +207,29 @@ function buildCriminalCheckInvitationEmail(params: { fullName: string; note: str
       </div>
     `,
     text: `Dear ${firstName}, your driver abstract review is complete. Please continue with your Criminal Record and judicial matters check. ChaufX will cover the cost of this verification. There is no charge to you. ${params.note} English: ${tritonCriminalCheckEnglishUrl} French: ${tritonCriminalCheckFrenchUrl}\n\nRegards,\nChaufX Team`
+  };
+}
+
+function buildDriverAbstractReminderEmail(params: { fullName: string; driverAbstractUrl: string }) {
+  const firstName = firstNameFromFullName(params.fullName);
+
+  return {
+    subject: "Complete your ChaufX Driver Abstract check",
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.7; max-width: 620px; margin: 0 auto;">
+        <p style="margin: 0 0 16px;">Dear ${firstName},</p>
+        <p style="margin: 0 0 16px;">We noticed that you have not yet completed your Driver Abstract check on our partner Triton’s website.</p>
+        <p style="margin: 0 0 16px;">Please use the link below to complete your <strong>Triton Driver Abstract Check</strong>. Once completed, return to the ChaufX platform and submit your application for review.</p>
+        <p style="margin: 24px 0;">
+          <a href="${params.driverAbstractUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">
+            Complete Driver Abstract
+          </a>
+        </p>
+        <p style="margin: 0;">Please note that this link will expire in <strong>48 hours</strong>.</p>
+        <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
+      </div>
+    `,
+    text: `Dear ${firstName},\n\nWe noticed that you have not yet completed your Driver Abstract check on our partner Triton’s website.\n\nPlease use the link below to complete your Triton Driver Abstract Check. Once completed, return to the ChaufX platform and submit your application for review.\n\nComplete Driver Abstract: ${params.driverAbstractUrl}\n\nPlease note that this link will expire in 48 hours.\n\nRegards,\nChaufX Team`
   };
 }
 
@@ -416,6 +443,10 @@ adminRoutes.post(
     const approved = input.decision === "approved";
     const additionalInfo = input.decision === "additional_info";
 
+    if (approved && !application.driverAbstractCandidateConfirmedAt) {
+      throw new AppError("The driver must complete the Driver Abstract step and submit for review before approval.", 400, "DRIVER_ABSTRACT_NOT_SUBMITTED");
+    }
+
     if (approved && application.driverAbstractInitiatedAt && !application.criminalCheckInvitedAt) {
       throw new AppError("Confirm the driver abstract and send the criminal record verification before approving this application.", 400, "BACKGROUND_CHECK_INCOMPLETE");
     }
@@ -548,6 +579,86 @@ adminRoutes.post(
 );
 
 adminRoutes.post(
+  "/admin/applications/:applicationId/driver-abstract-link",
+  asyncHandler(async (request, response) => {
+    const applicationId = paramValue(request.params.applicationId);
+    const application = await prisma.driverApplication.findUnique({
+      where: { id: applicationId },
+      include: { user: true }
+    });
+
+    if (!application?.userId || !application.user) {
+      throw new AppError("Driver application is missing its linked account", 400, "INVALID_APPLICATION");
+    }
+
+    if (application.status === "APPROVED" || application.status === "REJECTED") {
+      throw new AppError("A finalised application cannot receive a driver abstract link.", 409, "APPLICATION_FINALISED");
+    }
+
+    if (application.criminalCheckInvitedAt) {
+      throw new AppError("The criminal record verification stage has already started for this application.", 409, "CRIMINAL_CHECK_ALREADY_INVITED");
+    }
+
+    const token = await issueEmailVerificationToken({
+      email: application.email,
+      purpose: EmailVerificationPurpose.DRIVER_ABSTRACT_SUBMISSION,
+      payload: { applicationId: application.id },
+      ttlMs: DRIVER_ABSTRACT_SUBMISSION_TTL_MS
+    });
+    const driverAbstractUrl = new URL(`/driver/background-check?token=${encodeURIComponent(token)}`, env.CLIENT_APP_URL).toString();
+    const emailMessage = buildDriverAbstractReminderEmail({
+      fullName: application.fullName,
+      driverAbstractUrl
+    });
+
+    await sendTransactionalEmail({
+      to: application.email,
+      subject: emailMessage.subject,
+      html: emailMessage.html,
+      text: emailMessage.text
+    });
+
+    const sentAt = new Date();
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const updatedApplication = await tx.driverApplication.update({
+        where: { id: application.id },
+        data: {
+          status: "AWAITING_DRIVER_ABSTRACT",
+          driverAbstractCandidateConfirmedAt: null,
+          driverAbstractReminderSentAt: sentAt,
+          reviewNote: null,
+          reviewedAt: null
+        }
+      });
+
+      await tx.notification.create({
+        data: {
+          userId: application.userId!,
+          type: "APPLICATION_REVIEWED",
+          title: "Driver abstract action required",
+          body: "Complete the Triton Driver Abstract check and submit your application for review.",
+          channel: "EMAIL",
+          status: "SENT",
+          meta: { applicationId: application.id, stage: "DRIVER_ABSTRACT_REMINDER" }
+        }
+      });
+
+      return updatedApplication;
+    });
+
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "DRIVER_ABSTRACT_LINK_SENT",
+      entityType: "DriverApplication",
+      entityId: application.id,
+      details: { sentAt: sentAt.toISOString() }
+    });
+
+    response.json(result);
+  })
+);
+
+adminRoutes.post(
   "/admin/applications/:applicationId/background-check",
   asyncHandler(async (request, response) => {
     const applicationId = paramValue(request.params.applicationId);
@@ -564,6 +675,10 @@ adminRoutes.post(
 
     if (application.status === "APPROVED" || application.status === "REJECTED") {
       throw new AppError("A finalised application cannot receive a background-check invitation.", 400, "APPLICATION_FINALISED");
+    }
+
+    if (!application.driverAbstractCandidateConfirmedAt) {
+      throw new AppError("The driver must submit the Driver Abstract step before a criminal record verification link can be sent.", 400, "DRIVER_ABSTRACT_NOT_SUBMITTED");
     }
 
     if (application.criminalCheckInvitedAt) {

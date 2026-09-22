@@ -2,6 +2,8 @@ ALTER TABLE "DriverApplication"
   ADD COLUMN IF NOT EXISTS "backgroundCheckComment" TEXT,
   ADD COLUMN IF NOT EXISTS "applicantResponse" TEXT,
   ADD COLUMN IF NOT EXISTS "driverAbstractInitiatedAt" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "driverAbstractCandidateConfirmedAt" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "driverAbstractReminderSentAt" TIMESTAMP(3),
   ADD COLUMN IF NOT EXISTS "criminalCheckInvitedAt" TIMESTAMP(3),
   ADD COLUMN IF NOT EXISTS "criminalCheckInvitedByUserId" TEXT;
 
@@ -9,6 +11,8 @@ CREATE INDEX IF NOT EXISTS "DriverApplication_criminalCheckInvitedAt_idx"
   ON "DriverApplication"("criminalCheckInvitedAt");
 
 ALTER TYPE "EmailVerificationPurpose" ADD VALUE IF NOT EXISTS 'DRIVER_APPLICATION_UPDATE';
+ALTER TYPE "EmailVerificationPurpose" ADD VALUE IF NOT EXISTS 'DRIVER_ABSTRACT_SUBMISSION';
+ALTER TYPE "DriverApplicationStatus" ADD VALUE IF NOT EXISTS 'AWAITING_DRIVER_ABSTRACT';
 
 DO $$ BEGIN
   CREATE TYPE "DriverApplicationReviewAuthor" AS ENUM ('ADMIN', 'DRIVER');
@@ -18,6 +22,7 @@ END $$;
 
 DO $$ BEGIN
   CREATE TYPE "DriverApplicationReviewEvent" AS ENUM (
+    'DRIVER_ABSTRACT_SUBMITTED',
     'ADDITIONAL_INFORMATION_REQUESTED',
     'APPLICATION_RESUBMITTED',
     'APPROVED',
@@ -27,6 +32,8 @@ DO $$ BEGIN
 EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
+
+ALTER TYPE "DriverApplicationReviewEvent" ADD VALUE IF NOT EXISTS 'DRIVER_ABSTRACT_SUBMITTED';
 
 CREATE TABLE IF NOT EXISTS "DriverApplicationReviewHistory" (
   "id" TEXT NOT NULL,

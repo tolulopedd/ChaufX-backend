@@ -5,6 +5,7 @@ import { prisma } from "./prisma.js";
 
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 export const DRIVER_APPLICATION_UPDATE_TTL_MS = 48 * 60 * 60 * 1000;
+export const DRIVER_ABSTRACT_SUBMISSION_TTL_MS = 48 * 60 * 60 * 1000;
 
 function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -110,6 +111,29 @@ export async function requireDriverApplicationUpdateToken(rawToken: string) {
 
   if (typeof applicationId !== "string" || !applicationId) {
     throw new AppError("This application update link is invalid.", 400, "INVALID_APPLICATION_UPDATE_TOKEN");
+  }
+
+  return { record, applicationId };
+}
+
+export async function requireDriverAbstractSubmissionToken(rawToken: string) {
+  const record = await readEmailVerificationToken(rawToken);
+
+  if (record.purpose !== EmailVerificationPurpose.DRIVER_ABSTRACT_SUBMISSION) {
+    throw new AppError("This driver abstract link is invalid.", 400, "INVALID_DRIVER_ABSTRACT_TOKEN");
+  }
+
+  if (record.usedAt) {
+    throw new AppError("This driver abstract link has already been used.", 400, "USED_DRIVER_ABSTRACT_TOKEN");
+  }
+
+  const applicationId =
+    record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+      ? (record.payload as { applicationId?: unknown }).applicationId
+      : undefined;
+
+  if (typeof applicationId !== "string" || !applicationId) {
+    throw new AppError("This driver abstract link is invalid.", 400, "INVALID_DRIVER_ABSTRACT_TOKEN");
   }
 
   return { record, applicationId };
