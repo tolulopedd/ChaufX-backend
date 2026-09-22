@@ -443,7 +443,7 @@ adminRoutes.post(
     const approved = input.decision === "approved";
     const additionalInfo = input.decision === "additional_info";
 
-    if (approved && !application.driverAbstractCandidateConfirmedAt) {
+    if (approved && !application.driverAbstractCandidateConfirmedAt && !application.criminalCheckInvitedAt) {
       throw new AppError("The driver must complete the Driver Abstract step and submit for review before approval.", 400, "DRIVER_ABSTRACT_NOT_SUBMITTED");
     }
 
