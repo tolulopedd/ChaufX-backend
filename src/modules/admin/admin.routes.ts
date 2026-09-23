@@ -440,16 +440,12 @@ adminRoutes.post(
       throw new AppError("Driver application is missing its linked account", 400, "INVALID_APPLICATION");
     }
 
+    if (application.status === "APPROVED" || application.status === "REJECTED") {
+      throw new AppError("A finalised application cannot be reviewed again.", 409, "APPLICATION_FINALISED");
+    }
+
     const approved = input.decision === "approved";
     const additionalInfo = input.decision === "additional_info";
-
-    if (approved && !application.driverAbstractCandidateConfirmedAt && !application.criminalCheckInvitedAt) {
-      throw new AppError("The driver must complete the Driver Abstract step and submit for review before approval.", 400, "DRIVER_ABSTRACT_NOT_SUBMITTED");
-    }
-
-    if (approved && application.driverAbstractInitiatedAt && !application.criminalCheckInvitedAt) {
-      throw new AppError("Confirm the driver abstract and send the criminal record verification before approving this application.", 400, "BACKGROUND_CHECK_INCOMPLETE");
-    }
 
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const sanitizedAvailabilitySchedule = buildDriverAvailabilitySummary(application.availabilitySchedule);
@@ -595,10 +591,6 @@ adminRoutes.post(
       throw new AppError("A finalised application cannot receive a driver abstract link.", 409, "APPLICATION_FINALISED");
     }
 
-    if (application.criminalCheckInvitedAt) {
-      throw new AppError("The criminal record verification stage has already started for this application.", 409, "CRIMINAL_CHECK_ALREADY_INVITED");
-    }
-
     const token = await issueEmailVerificationToken({
       email: application.email,
       purpose: EmailVerificationPurpose.DRIVER_ABSTRACT_SUBMISSION,
@@ -675,14 +667,6 @@ adminRoutes.post(
 
     if (application.status === "APPROVED" || application.status === "REJECTED") {
       throw new AppError("A finalised application cannot receive a background-check invitation.", 400, "APPLICATION_FINALISED");
-    }
-
-    if (!application.driverAbstractCandidateConfirmedAt) {
-      throw new AppError("The driver must submit the Driver Abstract step before a criminal record verification link can be sent.", 400, "DRIVER_ABSTRACT_NOT_SUBMITTED");
-    }
-
-    if (application.criminalCheckInvitedAt) {
-      throw new AppError("A criminal record verification link has already been sent for this application.", 409, "CRIMINAL_CHECK_ALREADY_INVITED");
     }
 
     const emailMessage = buildCriminalCheckInvitationEmail({
