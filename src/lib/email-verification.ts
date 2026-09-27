@@ -18,10 +18,11 @@ export async function issueEmailVerificationToken(params: {
   ttlMs?: number;
 }) {
   const token = randomBytes(32).toString("hex");
+  const email = params.email.trim().toLowerCase();
 
   await prisma.emailVerificationToken.deleteMany({
     where: {
-      email: params.email,
+      email,
       purpose: params.purpose,
       usedAt: null
     }
@@ -29,7 +30,7 @@ export async function issueEmailVerificationToken(params: {
 
   await prisma.emailVerificationToken.create({
     data: {
-      email: params.email,
+      email,
       purpose: params.purpose,
       tokenHash: tokenHash(token),
       payload: params.payload,

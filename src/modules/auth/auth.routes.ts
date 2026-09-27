@@ -77,6 +77,10 @@ const confirmVerificationSchema = z.object({
   token: z.string().min(20)
 });
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
 export const authRoutes = Router();
 
 async function buildAndSendVerificationEmail(params: {
@@ -186,11 +190,18 @@ authRoutes.post(
   "/auth/verify-email/request/driver-onboarding",
   authLimiter,
   asyncHandler(async (request, response) => {
-    const input = driverVerificationRequestSchema.parse(request.body);
+    const parsedInput = driverVerificationRequestSchema.parse(request.body);
+    const input = {
+      ...parsedInput,
+      email: normalizeEmail(parsedInput.email)
+    };
 
-    const existingUser = await prisma.user.findUnique({
+    const existingUser = await prisma.user.findFirst({
       where: {
-        email: input.email
+        email: {
+          equals: input.email,
+          mode: "insensitive"
+        }
       }
     });
 

@@ -411,7 +411,8 @@ export async function findEligibleDrivers(
   expectedDurationMinutes: number,
   pickupLat: number,
   pickupLng: number,
-  pickupLocation: string
+  pickupLocation: string,
+  maxDrivers: number = appConfig.driverDispatchFanout
 ) {
   const freshnessMinutes = requestType === "NOW" ? realtimeDispatchFreshnessMinutes : appConfig.driverLocationFreshnessMinutes;
   const freshnessThreshold = new Date(Date.now() - freshnessMinutes * 60_000);
@@ -466,7 +467,7 @@ export async function findEligibleDrivers(
 
       return left.distanceKm - right.distanceKm;
     })
-    .slice(0, appConfig.driverDispatchFanout);
+    .slice(0, maxDrivers);
 }
 
 export function mapStateForBooking(booking: {
@@ -493,6 +494,7 @@ export async function createBookingRecord(input: {
   customerId: string;
   customerUserId: string;
   vehicleId?: string;
+  preferredDriverId?: string;
   requestType: "NOW" | "LATER";
   pickupLocation: string;
   pickupLat: number;
@@ -519,6 +521,7 @@ export async function createBookingRecord(input: {
     data: {
       customerId: input.customerId,
       vehicleId: input.vehicleId,
+      preferredDriverId: input.preferredDriverId,
       requestType: input.requestType,
       pickupLocation: input.pickupLocation,
       pickupLat: input.pickupLat,
@@ -550,6 +553,7 @@ function normalizeBookingText(value?: string | null) {
 export async function findMatchingAwaitingPaymentBooking(input: {
   customerId: string;
   vehicleId?: string;
+  preferredDriverId?: string;
   requestType: "NOW" | "LATER";
   pickupLocation: string;
   pickupLat: number;
@@ -593,7 +597,8 @@ export async function findMatchingAwaitingPaymentBooking(input: {
       Math.abs(Number(booking.destinationLng) - input.destinationLng) < 0.00001 &&
       normalizeBookingText(booking.specialNotes) === normalizeBookingText(input.specialNotes) &&
       normalizeBookingText(booking.vehicleDetails) === normalizeBookingText(input.vehicleDetails) &&
-      booking.zoneCode === input.zoneCode
+      booking.zoneCode === input.zoneCode &&
+      booking.preferredDriverId === (input.preferredDriverId ?? null)
     );
   });
 }
@@ -650,15 +655,22 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
     booking.status = BookingStatus.PENDING;
   }
 
-  const drivers = await findEligibleDrivers(
+  const eligibleDrivers = await findEligibleDrivers(
     booking.requestType,
     booking.zoneCode,
     booking.scheduledStartAt,
     booking.expectedDurationMinutes,
     Number(booking.pickupLat),
     Number(booking.pickupLng),
-    booking.pickupLocation
+    booking.pickupLocation,
+    Math.max(appConfig.driverDispatchFanout * 5, 50)
   );
+  const drivers = booking.preferredDriverId
+    ? [
+        ...eligibleDrivers.filter((driver) => driver.id === booking.preferredDriverId),
+        ...eligibleDrivers.filter((driver) => driver.id !== booking.preferredDriverId)
+      ].slice(0, appConfig.driverDispatchFanout)
+    : eligibleDrivers.slice(0, appConfig.driverDispatchFanout);
 
   if (drivers.length) {
     await prisma.bookingDispatch.createMany({

@@ -23,6 +23,10 @@ import {
   requireVerifiedEmailToken
 } from "../../lib/email-verification.js";
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
 function isDocumentReference(value: string) {
   if (value.startsWith("data:")) {
     return true;
@@ -78,7 +82,11 @@ export const driverOnboardingRoutes = Router();
 driverOnboardingRoutes.post(
   "/driver-onboarding/apply",
   asyncHandler(async (request, response) => {
-    const input = onboardingSchema.parse(request.body);
+    const parsedInput = onboardingSchema.parse(request.body);
+    const input = {
+      ...parsedInput,
+      email: normalizeEmail(parsedInput.email)
+    };
     const applicationUpdate = input.applicationUpdateToken
       ? await requireDriverApplicationUpdateToken(input.applicationUpdateToken)
       : null;
@@ -91,8 +99,13 @@ driverOnboardingRoutes.post(
       });
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email: input.email }
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        email: {
+          equals: input.email,
+          mode: "insensitive"
+        }
+      }
     });
 
     if (existingUser && existingUser.role !== UserRole.DRIVER) {
@@ -385,7 +398,10 @@ driverOnboardingRoutes.get(
 
     const application = await prisma.driverApplication.findFirst({
       where: {
-        email: query.email
+        email: {
+          equals: normalizeEmail(query.email),
+          mode: "insensitive"
+        }
       },
       include: {
         documents: true

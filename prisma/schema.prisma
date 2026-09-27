@@ -337,6 +337,7 @@ model Driver {
   application       DriverApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
   currentZone       ServiceZone?       @relation(fields: [currentZoneId], references: [id], onDelete: SetNull)
   bookings          Booking[]
+  preferredBookings Booking[]           @relation("PreferredDriver")
   trips             Trip[]
   bookingDispatches BookingDispatch[]
   documents         Document[]
@@ -435,6 +436,7 @@ model Booking {
   customerId              String
   vehicleId               String?
   assignedDriverId        String?
+  preferredDriverId       String?
   requestType             BookingRequestType @default(NOW)
   pickupLocation          String
   pickupLat               Float
@@ -460,6 +462,7 @@ model Booking {
   customer        CustomerProfile   @relation(fields: [customerId], references: [id], onDelete: Cascade)
   vehicle         Vehicle?          @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
   assignedDriver  Driver?           @relation(fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  preferredDriver Driver?           @relation("PreferredDriver", fields: [preferredDriverId], references: [id], onDelete: SetNull)
   trip            Trip?
   payment         Payment?
   rating          Rating?
@@ -469,6 +472,7 @@ model Booking {
 
   @@index([status, scheduledStartAt])
   @@index([assignedDriverId, status])
+  @@index([preferredDriverId])
   @@index([customerId, scheduledStartAt])
 }
 

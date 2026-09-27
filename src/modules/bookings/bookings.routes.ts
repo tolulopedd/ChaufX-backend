@@ -10,6 +10,7 @@ import {
   createBookingRecord,
   driverHasOverlap,
   ensureCustomerCanCancel,
+  findEligibleDrivers,
   findMatchingAwaitingPaymentBooking,
   resolveBookingPricing
 } from "./booking.service.js";
@@ -20,6 +21,7 @@ import { expireStripeCheckoutSession } from "../payments/payments.routes.js";
 
 export const createBookingSchema = z.object({
   vehicleId: z.string().uuid().optional(),
+  preferredDriverId: z.string().uuid().optional(),
   requestType: z.enum(["NOW", "LATER"]),
   pickupLocation: z.string().min(3),
   pickupLat: z.coerce.number(),
@@ -44,6 +46,16 @@ const estimateBookingSchema = z.object({
   pickupLng: z.coerce.number().min(-180).max(180).optional()
 });
 
+const preferredDriversSchema = z.object({
+  requestType: z.enum(["NOW", "LATER"]),
+  pickupLocation: z.string().min(3),
+  pickupLat: z.coerce.number().min(-90).max(90),
+  pickupLng: z.coerce.number().min(-180).max(180),
+  scheduledStartAt: z.coerce.date(),
+  expectedDurationMinutes: z.coerce.number().int().min(60),
+  zoneCode: z.string().min(3)
+});
+
 export const bookingsRoutes = Router();
 
 bookingsRoutes.use(requireAuth);
@@ -53,6 +65,39 @@ function formatCustomerDisplayName(fullName: string) {
   const lastInitial = remainingNames.at(-1)?.[0];
 
   return lastInitial ? `${firstName} ${lastInitial}.` : firstName;
+}
+
+function formatPreferredDriverName(fullName: string) {
+  const [firstName = "Driver", ...remainingNames] = fullName.trim().split(/\s+/);
+  const lastInitial = remainingNames.at(-1)?.[0];
+
+  return lastInitial ? `${firstName} ${lastInitial}.` : firstName;
+}
+
+async function ensurePreferredDriverWasUsedBefore(customerId: string, customerUserId: string, preferredDriverId?: string) {
+  if (!preferredDriverId) {
+    return;
+  }
+
+  const priorRatedTrip = await prisma.booking.findFirst({
+    where: {
+      customerId,
+      assignedDriverId: preferredDriverId,
+      status: BookingStatus.COMPLETED,
+      payment: { is: { status: "RECORDED" } },
+      rating: {
+        is: {
+          reviewerId: customerUserId,
+          score: { gte: 4 }
+        }
+      }
+    },
+    select: { id: true }
+  });
+
+  if (!priorRatedTrip) {
+    throw new AppError("That driver is no longer available as a repeat preference.", 403, "INVALID_PREFERRED_DRIVER");
+  }
 }
 
 function isVerifiedCustomer(customer: any) {
@@ -210,6 +255,8 @@ bookingsRoutes.post(
       where: { userId: request.auth!.userId }
     });
 
+    await ensurePreferredDriverWasUsedBefore(customer.id, request.auth!.userId, input.preferredDriverId);
+
     const pricing = await resolveBookingPricing({
       zoneCode: input.zoneCode,
       expectedDurationMinutes: input.expectedDurationMinutes,
@@ -255,6 +302,93 @@ bookingsRoutes.post(
       booking,
       notifiedDrivers: 0
     });
+  })
+);
+
+bookingsRoutes.get(
+  "/bookings/preferred-drivers",
+  requireRole(["customer"]),
+  asyncHandler(async (request, response) => {
+    const input = preferredDriversSchema.parse(request.query);
+    const customer = await prisma.customerProfile.findUniqueOrThrow({
+      where: { userId: request.auth!.userId }
+    });
+    const pastBookings = await prisma.booking.findMany({
+      where: {
+        customerId: customer.id,
+        assignedDriverId: { not: null },
+        status: BookingStatus.COMPLETED,
+        payment: { is: { status: "RECORDED" } },
+        rating: {
+          is: {
+            reviewerId: request.auth!.userId,
+            score: { gte: 4 }
+          }
+        }
+      },
+      select: {
+        assignedDriverId: true,
+        completedAt: true,
+        rating: { select: { score: true } }
+      },
+      orderBy: { completedAt: "desc" }
+    });
+
+    const priorDriverRatings = new Map<string, { customerRating: number; completedTripsWithYou: number; lastTripAt: Date | null }>();
+    for (const pastBooking of pastBookings) {
+      if (!pastBooking.assignedDriverId || !pastBooking.rating) {
+        continue;
+      }
+      const existing = priorDriverRatings.get(pastBooking.assignedDriverId);
+      priorDriverRatings.set(pastBooking.assignedDriverId, {
+        customerRating: existing?.customerRating ?? pastBooking.rating.score,
+        completedTripsWithYou: (existing?.completedTripsWithYou ?? 0) + 1,
+        lastTripAt: existing?.lastTripAt ?? pastBooking.completedAt
+      });
+    }
+
+    if (!priorDriverRatings.size) {
+      response.json([]);
+      return;
+    }
+
+    const eligibleDrivers = await findEligibleDrivers(
+      input.requestType,
+      input.zoneCode,
+      input.scheduledStartAt,
+      input.expectedDurationMinutes,
+      input.pickupLat,
+      input.pickupLng,
+      input.pickupLocation,
+      100
+    );
+    const ratings = await prisma.rating.groupBy({
+      by: ["reviewedUserId"],
+      where: {
+        reviewedUserId: { in: eligibleDrivers.map((driver) => driver.userId) }
+      },
+      _avg: { score: true },
+      _count: { score: true }
+    });
+    const ratingByUserId = new Map(ratings.map((rating) => [rating.reviewedUserId, rating]));
+
+    response.json(
+      eligibleDrivers
+        .filter((driver) => priorDriverRatings.has(driver.id))
+        .map((driver) => {
+          const history = priorDriverRatings.get(driver.id)!;
+          const aggregate = ratingByUserId.get(driver.userId);
+          return {
+            id: driver.id,
+            displayName: formatPreferredDriverName(driver.user.fullName),
+            averageRating: aggregate?._avg.score ?? null,
+            ratingCount: aggregate?._count.score ?? 0,
+            customerRating: history.customerRating,
+            completedTripsWithYou: history.completedTripsWithYou,
+            lastTripAt: history.lastTripAt
+          };
+        })
+    );
   })
 );
 
