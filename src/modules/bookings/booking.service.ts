@@ -721,6 +721,51 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
   return { booking, notifiedDrivers: drivers.length, skipped: false as const };
 }
 
+/**
+ * Retries paid requests that were created before any eligible driver was online.
+ * The booking-level dispatcher prevents requests already offered to a driver from
+ * being sent again.
+ */
+export async function dispatchOutstandingPaidBookings(limit: number = 25) {
+  const bookings = await prisma.booking.findMany({
+    where: {
+      status: {
+        in: [BookingStatus.AWAITING_PAYMENT, BookingStatus.PENDING]
+      },
+      assignedDriverId: null,
+      activationWindowEndAt: {
+        gt: new Date()
+      },
+      payment: {
+        is: {
+          status: PaymentStatus.RECORDED
+        }
+      },
+      dispatches: {
+        none: {
+          status: {
+            in: [BookingDispatchStatus.PENDING, BookingDispatchStatus.ACCEPTED]
+          }
+        }
+      }
+    },
+    select: {
+      id: true
+    },
+    orderBy: {
+      scheduledStartAt: "asc"
+    },
+    take: limit
+  });
+
+  const results = [];
+  for (const booking of bookings) {
+    results.push(await dispatchBookingToEligibleDrivers(booking.id));
+  }
+
+  return results;
+}
+
 export async function ensureCustomerCanCancel(bookingId: string, customerId: string) {
   const booking = await prisma.booking.findFirst({
     where: {

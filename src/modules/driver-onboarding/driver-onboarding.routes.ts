@@ -131,7 +131,11 @@ driverOnboardingRoutes.post(
       }
 
       if (existingApplication.status !== "UNDER_REVIEW") {
-        throw new AppError("This application is not currently awaiting additional information.", 400, "APPLICATION_NOT_AWAITING_UPDATE");
+        throw new AppError(
+          "This application update link is no longer active. Please contact the ChaufX Team for a new link.",
+          410,
+          "APPLICATION_UPDATE_NOT_ACTIVE"
+        );
       }
 
       const originalDocumentIds = new Set(existingApplication.documents.map((document) => document.id));
@@ -367,7 +371,8 @@ driverOnboardingRoutes.get(
     const application = await prisma.driverApplication.findUnique({
       where: { id: update.applicationId },
       select: {
-        fullName: true,
+      status: true,
+      fullName: true,
         phone: true,
         email: true,
         address: true,
@@ -383,6 +388,14 @@ driverOnboardingRoutes.get(
 
     if (!application || application.email.toLowerCase() !== update.record.email.toLowerCase()) {
       throw new AppError("This application update link is invalid.", 400, "INVALID_APPLICATION_UPDATE_TOKEN");
+    }
+
+    if (application.status !== "UNDER_REVIEW") {
+      throw new AppError(
+        "This application update link is no longer active. Please contact the ChaufX Team for a new link.",
+        410,
+        "APPLICATION_UPDATE_NOT_ACTIVE"
+      );
     }
 
     response.json(application);

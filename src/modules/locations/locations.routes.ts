@@ -56,9 +56,12 @@ locationsRoutes.post(
       throw new AppError("You are not assigned to this booking", 403, "FORBIDDEN");
     }
 
-    const mapState = mapStateForBooking(booking);
-    if (!mapState.active) {
-      throw new AppError("Live location updates are only available during the active trip window", 409, "MAP_LOCKED");
+    if (
+      booking.status !== BookingStatus.ACCEPTED &&
+      booking.status !== BookingStatus.ENROUTE &&
+      booking.status !== BookingStatus.ACTIVE
+    ) {
+      throw new AppError("Live location updates are available after you accept the trip", 409, "TRIP_NOT_READY");
     }
 
     const location = await prisma.location.create({

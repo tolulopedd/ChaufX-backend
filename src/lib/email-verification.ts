@@ -95,14 +95,30 @@ export async function requireVerifiedEmailToken(params: {
 }
 
 export async function requireDriverApplicationUpdateToken(rawToken: string) {
-  const record = await readEmailVerificationToken(rawToken);
+  let record;
+  try {
+    record = await readEmailVerificationToken(rawToken);
+  } catch (error) {
+    if (error instanceof AppError && error.code === "EXPIRED_VERIFICATION_TOKEN") {
+      throw new AppError(
+        "This application update link has expired. Please contact the ChaufX Team for a new link.",
+        410,
+        "EXPIRED_APPLICATION_UPDATE_TOKEN"
+      );
+    }
+    throw error;
+  }
 
   if (record.purpose !== EmailVerificationPurpose.DRIVER_APPLICATION_UPDATE) {
     throw new AppError("This application update link is invalid.", 400, "INVALID_APPLICATION_UPDATE_TOKEN");
   }
 
   if (record.usedAt) {
-    throw new AppError("This application update link has already been used.", 400, "USED_APPLICATION_UPDATE_TOKEN");
+    throw new AppError(
+      "This application update link is no longer active. Please contact the ChaufX Team for a new link.",
+      410,
+      "USED_APPLICATION_UPDATE_TOKEN"
+    );
   }
 
   const applicationId =

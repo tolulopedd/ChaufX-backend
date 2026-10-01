@@ -4,6 +4,7 @@ import { z } from "zod";
 import { asyncHandler } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
+import { dispatchOutstandingPaidBookings } from "../bookings/booking.service.js";
 
 export const driversRoutes = Router();
 
@@ -331,6 +332,10 @@ driversRoutes.patch(
       }
     });
 
+    if (availabilityStatus) {
+      await dispatchOutstandingPaidBookings();
+    }
+
     response.json(driver);
   })
 );
@@ -361,6 +366,10 @@ driversRoutes.patch(
         currentZoneId: zone?.id
       }
     });
+
+    if (driver.availabilityStatus) {
+      await dispatchOutstandingPaidBookings();
+    }
 
     response.json(driver);
   })

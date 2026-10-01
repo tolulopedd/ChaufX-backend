@@ -5,12 +5,33 @@ import { asyncHandler, paramValue } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { AppError } from "../../common/AppError.js";
-import { mapStateForBooking } from "../bookings/booking.service.js";
+import { haversineDistanceKm, mapStateForBooking } from "../bookings/booking.service.js";
 import { notifyUser, notifyUsers } from "../../lib/notifications.js";
 
 export const tripsRoutes = Router();
 
 tripsRoutes.use(requireAuth);
+
+function driverInitials(fullName: string) {
+  return fullName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+function customerCanAccessTrip(request: { auth?: { userId: string; role: string } }, booking: any) {
+  if (request.auth?.role === "admin") {
+    return true;
+  }
+
+  if (request.auth?.role === "customer") {
+    return booking.customer?.userId === request.auth.userId;
+  }
+
+  return booking.assignedDriver?.userId === request.auth?.userId;
+}
 
 tripsRoutes.get(
   "/trips/:bookingId/map-state",
@@ -25,6 +46,12 @@ tripsRoutes.get(
         id: bookingId
       },
       include: {
+        customer: {
+          select: { userId: true }
+        },
+        assignedDriver: {
+          select: { userId: true }
+        },
         locationUpdates: {
           orderBy: {
             recordedAt: "desc"
@@ -33,6 +60,10 @@ tripsRoutes.get(
         }
       }
     });
+
+    if (!customerCanAccessTrip(request, booking)) {
+      throw new AppError("You do not have access to this trip", 403, "FORBIDDEN");
+    }
 
     const mapState = mapStateForBooking(booking);
 
@@ -46,6 +77,87 @@ tripsRoutes.get(
             recordedAt: booking.locationUpdates[0].recordedAt.toISOString()
           }
         : null
+    });
+  })
+);
+
+tripsRoutes.get(
+  "/trips/:bookingId/handoff",
+  requireRole(["customer"]),
+  asyncHandler(async (request, response) => {
+    const bookingId = paramValue(request.params.bookingId);
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id: bookingId },
+      include: {
+        customer: {
+          select: { userId: true }
+        },
+        assignedDriver: {
+          include: {
+            user: {
+              select: { id: true, fullName: true }
+            }
+          }
+        },
+        vehicle: {
+          select: { make: true, model: true, plateNumber: true }
+        },
+        locationUpdates: {
+          orderBy: { recordedAt: "desc" },
+          take: 1
+        }
+      }
+    });
+
+    if (booking.customer.userId !== request.auth!.userId) {
+      throw new AppError("You do not have access to this trip", 403, "FORBIDDEN");
+    }
+    if (!booking.assignedDriver) {
+      throw new AppError("A driver has not been assigned yet", 409, "DRIVER_NOT_ASSIGNED");
+    }
+
+    const ratings = await prisma.rating.aggregate({
+      where: { reviewedUserId: booking.assignedDriver.userId },
+      _avg: { score: true },
+      _count: { score: true }
+    });
+    const latestLocation = booking.locationUpdates[0] ?? null;
+    const locationAgeMs = latestLocation ? Date.now() - latestLocation.recordedAt.getTime() : Number.POSITIVE_INFINITY;
+    const hasFreshLocation = locationAgeMs <= 5 * 60 * 1000;
+    const distanceKm =
+      latestLocation && hasFreshLocation
+        ? haversineDistanceKm(latestLocation.latitude, latestLocation.longitude, booking.pickupLat, booking.pickupLng)
+        : null;
+    const estimatedArrivalMinutes = distanceKm === null ? null : Math.max(1, Math.ceil((distanceKm / 32) * 60));
+
+    response.json({
+      bookingId: booking.id,
+      status: booking.status,
+      driver: {
+        displayName: booking.assignedDriver.user.fullName,
+        initials: driverInitials(booking.assignedDriver.user.fullName),
+        verified: Boolean(booking.assignedDriver.approvedAt),
+        rating: ratings._avg.score,
+        ratingCount: ratings._count.score
+      },
+      vehicle: booking.vehicle
+        ? {
+            make: booking.vehicle.make,
+            model: booking.vehicle.model,
+            plateNumber: booking.vehicle.plateNumber
+          }
+        : null,
+      handoffInstructions: booking.specialNotes,
+      latestDriverLocation:
+        latestLocation && hasFreshLocation
+          ? {
+              latitude: latestLocation.latitude,
+              longitude: latestLocation.longitude,
+              heading: latestLocation.heading,
+              recordedAt: latestLocation.recordedAt.toISOString()
+            }
+          : null,
+      eta: distanceKm === null ? null : { distanceKm, estimatedArrivalMinutes }
     });
   })
 );
