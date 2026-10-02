@@ -1263,6 +1263,61 @@ adminRoutes.post(
 );
 
 adminRoutes.post(
+  "/admin/users/:userId/resend-driver-password-link",
+  asyncHandler(async (request, response) => {
+    const userId = paramValue(request.params.userId);
+    const driver = await prisma.driver.findUnique({
+      where: { userId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            role: true
+          }
+        }
+      }
+    });
+
+    if (!driver || driver.user.role !== UserRole.DRIVER || !driver.approvedAt) {
+      throw new AppError(
+        "A set-password link can only be sent to an approved driver.",
+        400,
+        "DRIVER_PASSWORD_LINK_NOT_AVAILABLE"
+      );
+    }
+
+    const token = await issuePasswordResetToken(driver.user.id, DRIVER_WELCOME_PASSWORD_TTL_MS);
+    const setPasswordUrl = new URL(`/reset-password?token=${token}`, env.CLIENT_APP_URL).toString();
+    const emailMessage = buildDriverApplicationStatusEmail({
+      decision: "approved",
+      fullName: driver.user.fullName,
+      email: driver.user.email,
+      note: "Use the secure link below to set your ChaufX Driver password.",
+      setPasswordUrl
+    });
+
+    await sendTransactionalEmail({
+      to: driver.user.email,
+      subject: emailMessage.subject,
+      html: emailMessage.html,
+      text: emailMessage.text
+    });
+
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "DRIVER_PASSWORD_LINK_RESENT",
+      entityType: "User",
+      entityId: driver.user.id,
+      details: { email: driver.user.email }
+    });
+
+    response.json({ success: true });
+  })
+);
+
+adminRoutes.post(
   "/admin/users/:userId/status",
   asyncHandler(async (request, response) => {
     const userId = paramValue(request.params.userId);
