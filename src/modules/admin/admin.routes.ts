@@ -32,6 +32,7 @@ import {
   issueEmailVerificationToken
 } from "../../lib/email-verification.js";
 import { EmailVerificationPurpose } from "@prisma/client";
+import { calculateBookingSettlement } from "../settlements/settlement-calculation.js";
 
 export const adminRoutes = Router();
 
@@ -379,7 +380,7 @@ adminRoutes.get(
           amount: true
         },
         where: {
-          status: "RECORDED"
+          status: { in: [PaymentStatus.CAPTURED, PaymentStatus.RECORDED] }
         }
       })
     ]);
@@ -1632,7 +1633,7 @@ adminRoutes.get(
           },
           payment: {
             is: {
-              status: PaymentStatus.RECORDED
+              status: { in: [PaymentStatus.CAPTURED, PaymentStatus.RECORDED] }
             }
           }
         },
@@ -1647,7 +1648,8 @@ adminRoutes.get(
               user: true
             }
           },
-          payment: true
+          payment: true,
+          tripExtensions: true
         },
         orderBy: {
           completedAt: "desc"
@@ -1689,6 +1691,9 @@ adminRoutes.get(
           bookingId: string;
           completedAt: string | null;
           amount: number;
+          baseAmount: number;
+          extensionAmount: number;
+          extensionCount: number;
           customerName: string;
           pickupLocation: string;
           destinationLocation: string;
@@ -1707,11 +1712,14 @@ adminRoutes.get(
       const weekStartKey = weekStart.toISOString().slice(0, 10);
       const weekEndKey = weekEnd.toISOString().slice(0, 10);
       const groupKey = `${booking.assignedDriverId}::${weekStartKey}`;
-      const grossAmount = Number(booking.payment.amount ?? booking.fareEstimate ?? 0);
-      const platformShareAmount = Number(
-        ((grossAmount * settlementConfig.platformSharePercent) / 100).toFixed(2)
-      );
-      const driverShareAmount = Number((grossAmount - platformShareAmount).toFixed(2));
+      const {
+        baseAmount,
+        extensionAmount,
+        extensionCount,
+        grossAmount,
+        platformShareAmount,
+        driverShareAmount
+      } = calculateBookingSettlement(booking, settlementConfig.platformSharePercent);
 
       const current: {
         id: string;
@@ -1734,6 +1742,9 @@ adminRoutes.get(
           bookingId: string;
           completedAt: string | null;
           amount: number;
+          baseAmount: number;
+          extensionAmount: number;
+          extensionCount: number;
           customerName: string;
           pickupLocation: string;
           destinationLocation: string;
@@ -1770,6 +1781,9 @@ adminRoutes.get(
         bookingId: booking.id,
         completedAt: booking.completedAt?.toISOString() ?? null,
         amount: grossAmount,
+        baseAmount,
+        extensionAmount,
+        extensionCount,
         customerName: booking.customer?.user?.fullName ?? "Customer",
         pickupLocation: booking.pickupLocation,
         destinationLocation: booking.destinationLocation
@@ -1785,11 +1799,7 @@ adminRoutes.get(
       const current = grouped.get(groupKey);
 
       if (current) {
-        current.platformSharePercent = record.platformSharePercent;
-        current.grossAmount = record.grossAmount;
-        current.platformShareAmount = record.platformShareAmount;
-        current.driverShareAmount = record.driverShareAmount;
-        current.tripCount = record.tripCount;
+        current.platformSharePercent = settlementConfig.platformSharePercent;
         current.status = record.status;
         current.paidAt = record.paidAt?.toISOString() ?? null;
         current.payoutReference = record.payoutReference ?? null;
@@ -1902,7 +1912,7 @@ adminRoutes.post(
           status: BookingStatus.COMPLETED,
           payment: {
             is: {
-              status: PaymentStatus.RECORDED
+              status: { in: [PaymentStatus.CAPTURED, PaymentStatus.RECORDED] }
             }
           },
           OR: [
@@ -1940,13 +1950,18 @@ adminRoutes.post(
     }
 
     const settlementConfig = parseSettlementConfig(pricing);
+    const bookingAmounts = bookings.map((booking) =>
+      calculateBookingSettlement(booking, settlementConfig.platformSharePercent)
+    );
     const grossAmount = Number(
-      bookings.reduce((sum, booking) => sum + Number(booking.payment?.amount ?? booking.fareEstimate ?? 0), 0).toFixed(2)
+      bookingAmounts.reduce((sum, amounts) => sum + amounts.grossAmount, 0).toFixed(2)
     );
     const platformShareAmount = Number(
-      ((grossAmount * settlementConfig.platformSharePercent) / 100).toFixed(2)
+      bookingAmounts.reduce((sum, amounts) => sum + amounts.platformShareAmount, 0).toFixed(2)
     );
-    const driverShareAmount = Number((grossAmount - platformShareAmount).toFixed(2));
+    const driverShareAmount = Number(
+      bookingAmounts.reduce((sum, amounts) => sum + amounts.driverShareAmount, 0).toFixed(2)
+    );
 
     const settlement = await prisma.driverSettlement.upsert({
       where: {

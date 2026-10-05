@@ -3,6 +3,7 @@ import { appConfig, buildActivationWindow, isTripWindowActive } from "../../lib/
 import { AppError } from "../../common/AppError.js";
 import { prisma } from "../../lib/prisma.js";
 import { notifyUser, notifyUsers } from "../../lib/notifications.js";
+import { isPaymentAuthorizedForDispatch } from "../payments/payment-status.js";
 import { getActiveMembershipHourlyRate } from "../memberships/membership.service.js";
 
 const provincePricingPrefix = "PROVINCE::";
@@ -149,8 +150,13 @@ export function inferServiceRegion(
   pickupLocation?: string,
   destinationLocation?: string,
   pickupLat?: number,
-  pickupLng?: number
+  pickupLng?: number,
+  deviceLat?: number,
+  deviceLng?: number
 ): ServiceRegion {
+  const deviceRegion = findCanadianRegionByCoordinate(deviceLat, deviceLng);
+  if (deviceRegion) return deviceRegion;
+
   const pickupParts = String(pickupLocation ?? "")
     .split(",")
     .map((part) => part.trim())
@@ -190,13 +196,17 @@ export async function resolveBookingPricing(params: {
   destinationLocation?: string;
   pickupLat?: number;
   pickupLng?: number;
+  deviceLat?: number;
+  deviceLng?: number;
 }) {
   const region = inferServiceRegion(
     params.zoneCode,
     params.pickupLocation,
     params.destinationLocation,
     params.pickupLat,
-    params.pickupLng
+    params.pickupLng,
+    params.deviceLat,
+    params.deviceLng
   );
   const settings = await prisma.pricingSetting.findMany({
     where: {
@@ -519,24 +529,25 @@ export async function createBookingRecord(input: {
 
   const booking = await prisma.booking.create({
     data: {
-      customerId: input.customerId,
-      vehicleId: input.vehicleId,
-      preferredDriverId: input.preferredDriverId,
-      requestType: input.requestType,
-      pickupLocation: input.pickupLocation,
-      pickupLat: input.pickupLat,
-      pickupLng: input.pickupLng,
-      destinationLocation: input.destinationLocation,
-      destinationLat: input.destinationLat,
-      destinationLng: input.destinationLng,
-      scheduledStartAt: input.scheduledStartAt,
-      expectedDurationMinutes: input.expectedDurationMinutes,
-      specialNotes: input.specialNotes,
-      vehicleDetails: input.vehicleDetails,
-      zoneCode: input.zoneCode,
-      fareEstimate: pricing.fareEstimate,
-      activationWindowStartAt: activationWindow.startsAt,
-      activationWindowEndAt: activationWindow.endsAt
+        customerId: input.customerId,
+        vehicleId: input.vehicleId,
+        preferredDriverId: input.preferredDriverId,
+        requestType: input.requestType,
+        pickupLocation: input.pickupLocation,
+        pickupLat: input.pickupLat,
+        pickupLng: input.pickupLng,
+        destinationLocation: input.destinationLocation,
+        destinationLat: input.destinationLat,
+        destinationLng: input.destinationLng,
+        scheduledStartAt: input.scheduledStartAt,
+        expectedDurationMinutes: input.expectedDurationMinutes,
+        specialNotes: input.specialNotes,
+        vehicleDetails: input.vehicleDetails,
+        zoneCode: input.zoneCode,
+        fareEstimate: pricing.fareEstimate,
+        bookedHourlyRate: pricing.flatFee,
+        activationWindowStartAt: activationWindow.startsAt,
+        activationWindowEndAt: activationWindow.endsAt
     }
   });
 
@@ -614,13 +625,10 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
       },
       payment: true,
       dispatches: {
-        where: {
-          status: {
-            in: [BookingDispatchStatus.PENDING, BookingDispatchStatus.ACCEPTED]
-          }
-        },
         select: {
-          id: true
+          id: true,
+          driverId: true,
+          status: true
         }
       }
     }
@@ -637,12 +645,15 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
     return { booking, notifiedDrivers: 0, skipped: true as const };
   }
 
-  if (!booking.payment || booking.payment.status !== "RECORDED") {
+  if (!booking.payment || !isPaymentAuthorizedForDispatch(booking.payment.status)) {
     return { booking, notifiedDrivers: 0, skipped: true as const };
   }
 
-  if (booking.dispatches.length > 0) {
-    return { booking, notifiedDrivers: booking.dispatches.length, skipped: true as const };
+  const activeDispatches = booking.dispatches.filter(
+    (dispatch) => dispatch.status === BookingDispatchStatus.PENDING || dispatch.status === BookingDispatchStatus.ACCEPTED
+  );
+  if (activeDispatches.length > 0) {
+    return { booking, notifiedDrivers: activeDispatches.length, skipped: true as const };
   }
 
   if (booking.status === BookingStatus.AWAITING_PAYMENT) {
@@ -665,12 +676,15 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
     booking.pickupLocation,
     Math.max(appConfig.driverDispatchFanout * 5, 50)
   );
+  // A driver sees each request only once. Later retries can reach newly available drivers.
+  const offeredDriverIds = new Set(booking.dispatches.map((dispatch) => dispatch.driverId));
+  const unofferedDrivers = eligibleDrivers.filter((driver) => !offeredDriverIds.has(driver.id));
   const drivers = booking.preferredDriverId
     ? [
-        ...eligibleDrivers.filter((driver) => driver.id === booking.preferredDriverId),
-        ...eligibleDrivers.filter((driver) => driver.id !== booking.preferredDriverId)
+        ...unofferedDrivers.filter((driver) => driver.id === booking.preferredDriverId),
+        ...unofferedDrivers.filter((driver) => driver.id !== booking.preferredDriverId)
       ].slice(0, appConfig.driverDispatchFanout)
-    : eligibleDrivers.slice(0, appConfig.driverDispatchFanout);
+    : unofferedDrivers.slice(0, appConfig.driverDispatchFanout);
 
   if (drivers.length) {
     await prisma.bookingDispatch.createMany({
@@ -679,7 +693,9 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
         driverId: driver.id,
         distanceKm: driver.distanceKm,
         status: BookingDispatchStatus.PENDING
-      }))
+      })),
+      // Another dispatch attempt may win a race; duplicate offers stay harmless.
+      skipDuplicates: true
     });
 
     await notifyUsers(
@@ -738,7 +754,7 @@ export async function dispatchOutstandingPaidBookings(limit: number = 25) {
       },
       payment: {
         is: {
-          status: PaymentStatus.RECORDED
+          status: { in: [PaymentStatus.AUTHORIZED, PaymentStatus.CAPTURED, PaymentStatus.RECORDED] }
         }
       },
       dispatches: {
@@ -778,8 +794,12 @@ export async function ensureCustomerCanCancel(bookingId: string, customerId: str
     throw new AppError("Booking not found", 404, "BOOKING_NOT_FOUND");
   }
 
-  if (booking.status === BookingStatus.ACTIVE || booking.status === BookingStatus.ENROUTE) {
-    throw new AppError("Trips cannot be cancelled after they start", 409, "TRIP_ALREADY_STARTED");
+  if (booking.status !== BookingStatus.AWAITING_PAYMENT && booking.status !== BookingStatus.PENDING) {
+    throw new AppError(
+      "This booking can no longer be cancelled in the app. Contact support if you need assistance.",
+      409,
+      "BOOKING_CANCELLATION_LOCKED"
+    );
   }
 
   return booking;

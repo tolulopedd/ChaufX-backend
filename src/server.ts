@@ -3,6 +3,9 @@ import { Server } from "socket.io";
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { prisma } from "./lib/prisma.js";
+import { dispatchOutstandingPaidBookings } from "./modules/bookings/booking.service.js";
+import { releaseExpiredAuthorizedBookings } from "./modules/payments/payments.routes.js";
+import { completeExpiredPaidTrips, sendTripExtensionReminders } from "./modules/trips/trip-lifecycle.service.js";
 
 const app = createApp();
 const server = createServer(app);
@@ -13,6 +16,49 @@ const io = new Server(server, {
   }
 });
 
+const paidBookingDispatchIntervalMs = 60_000;
+let dispatchRetryInFlight = false;
+let tripLifecycleInFlight = false;
+
+async function retryOutstandingPaidBookings() {
+  if (dispatchRetryInFlight) {
+    return;
+  }
+
+  dispatchRetryInFlight = true;
+  try {
+    await dispatchOutstandingPaidBookings();
+    await releaseExpiredAuthorizedBookings();
+  } catch (error) {
+    // A retry failure must not take the API offline; the next interval will retry it.
+    console.error("Unable to retry outstanding paid bookings", error);
+  } finally {
+    dispatchRetryInFlight = false;
+  }
+}
+
+async function processTripLifecycle() {
+  if (tripLifecycleInFlight) {
+    return;
+  }
+
+  tripLifecycleInFlight = true;
+  try {
+    await sendTripExtensionReminders();
+    await completeExpiredPaidTrips();
+  } catch (error) {
+    console.error("Unable to process paid trip lifecycle", error);
+  } finally {
+    tripLifecycleInFlight = false;
+  }
+}
+
+const paidBookingDispatchTimer = setInterval(() => {
+  void retryOutstandingPaidBookings();
+  void processTripLifecycle();
+}, paidBookingDispatchIntervalMs);
+paidBookingDispatchTimer.unref();
+
 io.on("connection", (socket) => {
   socket.on("trip:subscribe", (bookingId: string) => {
     socket.join(`trip:${bookingId}`);
@@ -21,6 +67,9 @@ io.on("connection", (socket) => {
 
 async function boot() {
   await prisma.$connect();
+
+  await retryOutstandingPaidBookings();
+  await processTripLifecycle();
 
   server.listen(env.PORT, env.HOST, () => {
     console.log(`ChaufX API running on http://${env.HOST}:${env.PORT}`);
@@ -33,11 +82,13 @@ boot().catch((error) => {
 });
 
 process.on("SIGINT", async () => {
+  clearInterval(paidBookingDispatchTimer);
   await prisma.$disconnect();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
+  clearInterval(paidBookingDispatchTimer);
   await prisma.$disconnect();
   process.exit(0);
 });

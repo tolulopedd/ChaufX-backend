@@ -1,10 +1,11 @@
-import { type Prisma } from "@prisma/client";
+import { PaymentStatus, type Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { dispatchOutstandingPaidBookings } from "../bookings/booking.service.js";
+import { calculateBookingSettlement } from "../settlements/settlement-calculation.js";
 
 export const driversRoutes = Router();
 
@@ -47,7 +48,8 @@ driversRoutes.get(
                 }
               },
               payment: true,
-              trip: true
+              trip: true,
+              tripExtensions: true
             },
             orderBy: {
               scheduledStartAt: "desc"
@@ -106,10 +108,13 @@ driversRoutes.get(
               };
               payment: true;
               trip: true;
+              tripExtensions: true;
             };
           };
         };
-      }>["bookings"][number]) => booking.status === "COMPLETED" && booking.payment?.status === "RECORDED"
+      }>["bookings"][number]) =>
+        booking.status === "COMPLETED" &&
+        (booking.payment?.status === PaymentStatus.CAPTURED || booking.payment?.status === PaymentStatus.RECORDED)
     );
 
     const currentWeekStart = getSettlementWeekStart(new Date());
@@ -135,6 +140,9 @@ driversRoutes.get(
           bookingId: string;
           completedAt: string | null;
           amount: number;
+          baseAmount: number;
+          extensionAmount: number;
+          extensionCount: number;
           customerName: string;
           pickupLocation: string;
           destinationLocation: string;
@@ -143,9 +151,14 @@ driversRoutes.get(
     >();
 
     for (const booking of paidCompletedBookings) {
-      const grossAmount = Number(booking.payment?.amount ?? booking.fareEstimate ?? 0);
-      const platformShareAmount = Number(((grossAmount * platformSharePercent) / 100).toFixed(2));
-      const driverShareAmount = Number(((grossAmount * driverSharePercent) / 100).toFixed(2));
+      const {
+        baseAmount,
+        extensionAmount,
+        extensionCount,
+        grossAmount,
+        platformShareAmount,
+        driverShareAmount
+      } = calculateBookingSettlement(booking, platformSharePercent);
       const settlementDate = booking.completedAt ?? booking.payment?.recordedAt ?? booking.updatedAt;
       const weekStart = getSettlementWeekStart(settlementDate);
       const weekEnd = getSettlementWeekEnd(weekStart);
@@ -168,6 +181,9 @@ driversRoutes.get(
           bookingId: string;
           completedAt: string | null;
           amount: number;
+          baseAmount: number;
+          extensionAmount: number;
+          extensionCount: number;
           customerName: string;
           pickupLocation: string;
           destinationLocation: string;
@@ -202,6 +218,9 @@ driversRoutes.get(
         bookingId: booking.id,
         completedAt: booking.completedAt?.toISOString() ?? null,
         amount: grossAmount,
+        baseAmount,
+        extensionAmount,
+        extensionCount,
         customerName: booking.customer?.user?.fullName ?? "Customer",
         pickupLocation: booking.pickupLocation,
         destinationLocation: booking.destinationLocation
@@ -215,11 +234,7 @@ driversRoutes.get(
       const current = settlementRows.get(key);
 
       if (current) {
-        current.grossAmount = payoutRecord.grossAmount;
-        current.platformSharePercent = payoutRecord.platformSharePercent;
-        current.platformShareAmount = payoutRecord.platformShareAmount;
-        current.driverShareAmount = payoutRecord.driverShareAmount;
-        current.tripCount = payoutRecord.tripCount;
+        current.platformSharePercent = platformSharePercent;
         current.status = payoutRecord.status;
         current.paidAt = payoutRecord.paidAt?.toISOString() ?? null;
         current.payoutReference = payoutRecord.payoutReference ?? null;
@@ -262,10 +277,13 @@ driversRoutes.get(
           return totals;
         }
 
-        const grossAmount = Number(booking.payment?.amount ?? booking.fareEstimate ?? 0);
+        const { grossAmount, driverShareAmount } = calculateBookingSettlement(
+          booking,
+          platformSharePercent
+        );
         totals.tripCount += 1;
         totals.grossAmount = Number((totals.grossAmount + grossAmount).toFixed(2));
-        totals.driverShareAmount = Number((totals.driverShareAmount + (grossAmount * driverSharePercent) / 100).toFixed(2));
+        totals.driverShareAmount = Number((totals.driverShareAmount + driverShareAmount).toFixed(2));
         return totals;
       },
       {
@@ -277,20 +295,26 @@ driversRoutes.get(
 
     const lifetimeGrossAmount = paidCompletedBookings.reduce(
       (sum: number, booking: (typeof paidCompletedBookings)[number]) =>
-        Number((sum + Number(booking.payment?.amount ?? booking.fareEstimate ?? 0)).toFixed(2)),
+        Number((sum + calculateBookingSettlement(booking, platformSharePercent).grossAmount).toFixed(2)),
       0
     );
-    const lifetimeDriverShareAmount = Number(((lifetimeGrossAmount * driverSharePercent) / 100).toFixed(2));
+    const lifetimeDriverShareAmount = paidCompletedBookings.reduce(
+      (sum: number, booking: (typeof paidCompletedBookings)[number]) =>
+        Number(
+          (sum + calculateBookingSettlement(booking, platformSharePercent).driverShareAmount).toFixed(2)
+        ),
+      0
+    );
     const paidOutDriverShareAmount = Number(
-      payoutRecords
+      weeklySettlementRows
         .filter((record) => record.status === "PAID")
-        .reduce((sum: number, record: { driverShareAmount: number }) => sum + record.driverShareAmount, 0)
+        .reduce((sum, record) => sum + record.driverShareAmount, 0)
         .toFixed(2)
     );
     const outstandingDriverShareAmount = Number(
-      payoutRecords
+      weeklySettlementRows
         .filter((record) => record.status !== "PAID")
-        .reduce((sum: number, record: { driverShareAmount: number }) => sum + record.driverShareAmount, 0)
+        .reduce((sum, record) => sum + record.driverShareAmount, 0)
         .toFixed(2)
     );
 

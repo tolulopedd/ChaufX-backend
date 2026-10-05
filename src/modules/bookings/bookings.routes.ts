@@ -1,5 +1,5 @@
 import { buildActivationWindow } from "../../lib/app-config.js";
-import { BookingDispatchStatus, BookingStatus } from "@prisma/client";
+import { BookingDispatchStatus, BookingStatus, PaymentStatus } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler, paramValue } from "../../lib/http.js";
@@ -8,6 +8,7 @@ import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { AppError } from "../../common/AppError.js";
 import {
   createBookingRecord,
+  dispatchBookingToEligibleDrivers,
   driverHasOverlap,
   ensureCustomerCanCancel,
   findEligibleDrivers,
@@ -17,7 +18,8 @@ import {
 import { createAuditLog } from "../../lib/audit.js";
 import { notifyUser, notifyUsers } from "../../lib/notifications.js";
 import { isEligibleCustomerAge } from "../../lib/customer-age.js";
-import { expireStripeCheckoutSession } from "../payments/payments.routes.js";
+import { cancelStripePaymentIntent, captureStripePaymentIntent, expireStripeCheckoutSession } from "../payments/payments.routes.js";
+import { isPaymentCaptured } from "../payments/payment-status.js";
 
 export const createBookingSchema = z.object({
   vehicleId: z.string().uuid().optional(),
@@ -26,6 +28,8 @@ export const createBookingSchema = z.object({
   pickupLocation: z.string().min(3),
   pickupLat: z.coerce.number(),
   pickupLng: z.coerce.number(),
+  deviceLat: z.coerce.number().min(-90).max(90).optional(),
+  deviceLng: z.coerce.number().min(-180).max(180).optional(),
   destinationLocation: z.string().min(3),
   destinationLat: z.coerce.number(),
   destinationLng: z.coerce.number(),
@@ -36,6 +40,28 @@ export const createBookingSchema = z.object({
   zoneCode: z.string().min(3)
 });
 
+async function captureAuthorizedBookingPayment(
+  payment: { id: string; status: PaymentStatus; stripePaymentIntentId: string | null; capturedAt: Date | null; recordedAt: Date | null }
+) {
+  if (isPaymentCaptured(payment.status)) return null;
+  if (payment.status !== PaymentStatus.AUTHORIZED || !payment.stripePaymentIntentId) {
+    throw new AppError("This booking does not have a valid card authorization.", 409, "PAYMENT_NOT_AUTHORIZED");
+  }
+  const intent = await captureStripePaymentIntent(payment.stripePaymentIntentId, `chaufx-booking-capture-${payment.id}`);
+  if (intent.status !== "succeeded") {
+    throw new AppError("The payment authorization could not be captured.", 409, "PAYMENT_NOT_CAPTURABLE");
+  }
+  return intent;
+}
+
+export function validateBookingStartTime(requestType: "NOW" | "LATER", scheduledStartAt: Date, now: Date = new Date()) {
+  if (requestType === "NOW") {
+    return scheduledStartAt.getTime() >= now.getTime();
+  }
+
+  return scheduledStartAt.getTime() >= now.getTime() + 60 * 60_000;
+}
+
 const estimateBookingSchema = z.object({
   scheduledStartAt: z.coerce.date(),
   expectedDurationMinutes: z.coerce.number().int().min(60),
@@ -43,7 +69,9 @@ const estimateBookingSchema = z.object({
   pickupLocation: z.string().min(3).optional(),
   destinationLocation: z.string().min(3).optional(),
   pickupLat: z.coerce.number().min(-90).max(90).optional(),
-  pickupLng: z.coerce.number().min(-180).max(180).optional()
+  pickupLng: z.coerce.number().min(-180).max(180).optional(),
+  deviceLat: z.coerce.number().min(-90).max(90).optional(),
+  deviceLng: z.coerce.number().min(-180).max(180).optional()
 });
 
 const preferredDriversSchema = z.object({
@@ -84,7 +112,7 @@ async function ensurePreferredDriverWasUsedBefore(customerId: string, customerUs
       customerId,
       assignedDriverId: preferredDriverId,
       status: BookingStatus.COMPLETED,
-      payment: { is: { status: "RECORDED" } },
+      payment: { is: { status: { in: [PaymentStatus.CAPTURED, PaymentStatus.RECORDED] } } },
       rating: {
         is: {
           reviewerId: customerUserId,
@@ -141,7 +169,7 @@ function toDriverBookingResponse(booking: any) {
     acceptedAt: booking.acceptedAt,
     completedAt: booking.completedAt,
     trip: booking.trip,
-    paymentReady: booking.payment?.status === "RECORDED",
+    paymentReady: booking.payment?.status === PaymentStatus.AUTHORIZED || isPaymentCaptured(booking.payment?.status),
     dispatches: booking.dispatches,
     customerSummary: {
       displayName: formatCustomerDisplayName(booking.customer.user.fullName),
@@ -216,14 +244,18 @@ bookingsRoutes.post(
       expectedDurationMinutes: input.expectedDurationMinutes,
       customerUserId: request.auth!.userId,
       pickupLocation: input.pickupLocation,
-      destinationLocation: input.destinationLocation,
-      pickupLat: input.pickupLat,
-      pickupLng: input.pickupLng
-    });
+        destinationLocation: input.destinationLocation,
+        pickupLat: input.pickupLat,
+        pickupLng: input.pickupLng,
+        deviceLat: input.deviceLat,
+        deviceLng: input.deviceLng
+      });
     const pricingRateLabel = pricing.membershipApplied ? "membership rate" : "rate";
-
     response.json({
       fareEstimate: pricing.fareEstimate,
+      serviceFareEstimate: pricing.fareEstimate,
+      carriedOverageAmount: 0,
+      carriedOverageHours: 0,
       currency: "CAD",
       zoneCode: input.zoneCode,
       flatFeePerHour: pricing.flatFee,
@@ -249,6 +281,16 @@ bookingsRoutes.post(
   asyncHandler(async (request, response) => {
     const input = createBookingSchema.parse(request.body);
 
+    if (!validateBookingStartTime(input.requestType, input.scheduledStartAt)) {
+      throw new AppError(
+        input.requestType === "NOW"
+          ? "Book Now requests must start in the future. Refresh your estimate and try again."
+          : "Schedule later requests must start at least one hour from now.",
+        400,
+        "INVALID_BOOKING_START_TIME"
+      );
+    }
+
     await ensureCustomerCanBook(request.auth!.userId);
 
     const customer = await prisma.customerProfile.findUniqueOrThrow({
@@ -262,16 +304,19 @@ bookingsRoutes.post(
       expectedDurationMinutes: input.expectedDurationMinutes,
       customerUserId: request.auth!.userId,
       pickupLocation: input.pickupLocation,
-      destinationLocation: input.destinationLocation,
-      pickupLat: input.pickupLat,
-      pickupLng: input.pickupLng
-    });
+        destinationLocation: input.destinationLocation,
+        pickupLat: input.pickupLat,
+        pickupLng: input.pickupLng,
+        deviceLat: input.deviceLat,
+        deviceLng: input.deviceLng
+      });
     const existingBooking = await findMatchingAwaitingPaymentBooking({
       customerId: customer.id,
       ...input
     });
 
-    if (existingBooking && Math.abs(Number(existingBooking.fareEstimate) - pricing.fareEstimate) < 0.005) {
+    const expectedFare = pricing.fareEstimate;
+    if (existingBooking && Math.abs(Number(existingBooking.fareEstimate) - expectedFare) < 0.005) {
       response.json({
         booking: existingBooking,
         reusedPendingBooking: true
@@ -318,7 +363,7 @@ bookingsRoutes.get(
         customerId: customer.id,
         assignedDriverId: { not: null },
         status: BookingStatus.COMPLETED,
-        payment: { is: { status: "RECORDED" } },
+        payment: { is: { status: { in: [PaymentStatus.CAPTURED, PaymentStatus.RECORDED] } } },
         rating: {
           is: {
             reviewerId: request.auth!.userId,
@@ -485,7 +530,7 @@ bookingsRoutes.get(
                   bookings: {
                     where: {
                       status: BookingStatus.COMPLETED,
-                      payment: { is: { status: "RECORDED" } }
+                      payment: { is: { status: { in: [PaymentStatus.CAPTURED, PaymentStatus.RECORDED] } } }
                     }
                   }
                 }
@@ -494,7 +539,7 @@ bookingsRoutes.get(
           },
           vehicle: { select: { make: true, model: true } },
           payment: { select: { status: true } },
-          trip: { select: { id: true, status: true, startedAt: true, endedAt: true } },
+          trip: { select: { id: true, status: true, arrivedAt: true, startedAt: true, endedAt: true } },
           dispatches: {
             where: {
               driverId: driver.id
@@ -574,7 +619,8 @@ bookingsRoutes.post(
     });
 
     const booking = await prisma.booking.findUniqueOrThrow({
-      where: { id: bookingId }
+      where: { id: bookingId },
+      include: { payment: true }
     });
 
     if (booking.status === BookingStatus.AWAITING_PAYMENT) {
@@ -602,7 +648,47 @@ bookingsRoutes.post(
       throw new AppError("This trip overlaps with another accepted assignment", 409, "OVERLAPPING_BOOKING");
     }
 
+    if (!booking.payment) {
+      throw new AppError("Payment authorization is missing", 409, "PAYMENT_NOT_AUTHORIZED");
+    }
+
+    // Stripe calls can take several seconds. Complete the idempotent capture
+    // before opening the database transaction so a remote request never holds
+    // the booking row lock or exhausts Prisma's transaction timeout.
+    const capturedIntent = await captureAuthorizedBookingPayment(booking.payment);
+
     const updatedBooking = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Booking" WHERE id = ${booking.id} FOR UPDATE`;
+      const current = await tx.booking.findUniqueOrThrow({
+        where: { id: booking.id },
+        include: { payment: true }
+      });
+      if (current.status !== BookingStatus.PENDING || current.assignedDriverId) {
+        throw new AppError("This booking is no longer available", 409, "BOOKING_UNAVAILABLE");
+      }
+      if (!current.payment) {
+        throw new AppError("Payment authorization is missing", 409, "PAYMENT_NOT_AUTHORIZED");
+      }
+      if (!isPaymentCaptured(current.payment.status)) {
+        if (
+          !capturedIntent ||
+          current.payment.status !== PaymentStatus.AUTHORIZED ||
+          current.payment.stripePaymentIntentId !== capturedIntent.id
+        ) {
+          throw new AppError("Payment authorization is no longer capturable", 409, "PAYMENT_NOT_AUTHORIZED");
+        }
+        const now = new Date();
+        await tx.payment.update({
+          where: { id: current.payment.id },
+          data: {
+            status: PaymentStatus.CAPTURED,
+            capturedAmount: (capturedIntent.amount_received ?? capturedIntent.amount) / 100,
+            capturedAt: current.payment.capturedAt ?? now,
+            recordedAt: current.payment.recordedAt ?? now,
+            notes: "Stripe card authorization captured after driver acceptance."
+          }
+        });
+      }
       const acceptedBooking = await tx.booking.update({
         where: { id: booking.id },
         data: {
@@ -717,6 +803,11 @@ bookingsRoutes.post(
       throw new AppError("This request is no longer routed to you", 403, "BOOKING_NOT_ROUTED");
     }
 
+    // Declines are internal dispatch events. Keep the customer in the matching
+    // state and immediately move on to the next eligible driver when the
+    // current dispatch batch has no pending offers left.
+    await dispatchBookingToEligibleDrivers(bookingId);
+
     response.json({
       success: true,
       message: "Driver rejection acknowledged. The booking remains available to other eligible drivers."
@@ -743,17 +834,54 @@ bookingsRoutes.post(
       }
     });
 
-    if (currentBooking.payment?.status === "PENDING" && currentBooking.payment.providerReference) {
+    if (currentBooking.payment?.status === PaymentStatus.PENDING && currentBooking.payment.providerReference) {
       await expireStripeCheckoutSession(currentBooking.payment.providerReference);
     }
 
+    const releasedIntent =
+      currentBooking.payment?.status === PaymentStatus.AUTHORIZED && currentBooking.payment.stripePaymentIntentId
+        ? await cancelStripePaymentIntent(
+            currentBooking.payment.stripePaymentIntentId,
+            `chaufx-booking-release-${currentBooking.payment.id}`
+          )
+        : null;
+
     const booking = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Booking" WHERE id = ${bookingId} FOR UPDATE`;
+      const locked = await tx.booking.findUniqueOrThrow({ where: { id: bookingId }, include: { payment: true, trip: true } });
+      if (
+        (locked.status !== BookingStatus.AWAITING_PAYMENT && locked.status !== BookingStatus.PENDING) ||
+        locked.assignedDriverId ||
+        isPaymentCaptured(locked.payment?.status)
+      ) {
+        throw new AppError(
+          "This booking can no longer be cancelled in the app. Contact support if you need assistance.",
+          409,
+          "BOOKING_CANCELLATION_LOCKED"
+        );
+      }
+      if (locked.payment?.status === PaymentStatus.AUTHORIZED && locked.payment.stripePaymentIntentId) {
+        if (!releasedIntent || releasedIntent.id !== locked.payment.stripePaymentIntentId) {
+          throw new AppError("The payment authorization changed while cancellation was processing.", 409, "PAYMENT_STATE_CHANGED");
+        }
+        if (releasedIntent.status === "succeeded") {
+          throw new AppError("This booking was accepted while the cancellation was processing.", 409, "BOOKING_ALREADY_ACCEPTED");
+        }
+        await tx.payment.update({
+          where: { id: locked.payment.id },
+          data: {
+            status: PaymentStatus.AUTHORIZATION_RELEASED,
+            authorizationReleasedAt: new Date(),
+            notes: "Stripe card authorization released after customer cancellation."
+          }
+        });
+      }
       const cancelledBooking = await tx.booking.update({
         where: { id: bookingId },
         data: {
           status: BookingStatus.CANCELLED,
           cancelledAt: new Date(),
-          trip: currentBooking.trip
+          trip: locked.trip
             ? {
                 update: {
                   status: "CANCELLED",
@@ -776,7 +904,7 @@ bookingsRoutes.post(
         }
       });
 
-      if (currentBooking.payment?.status === "PENDING") {
+      if (locked.payment?.status === PaymentStatus.PENDING) {
         await tx.payment.update({
           where: { bookingId },
           data: {
@@ -785,6 +913,16 @@ bookingsRoutes.post(
           }
         });
       }
+
+      await tx.customerOverageCharge.updateMany({
+        where: {
+          appliedToBookingId: bookingId,
+          status: "PENDING"
+        },
+        data: {
+          appliedToBookingId: null
+        }
+      });
 
       return cancelledBooking;
     });
@@ -803,7 +941,8 @@ bookingsRoutes.post(
     });
     const input = schema.parse(request.body);
     const booking = await prisma.booking.findUniqueOrThrow({
-      where: { id: bookingId }
+      where: { id: bookingId },
+      include: { payment: true }
     });
 
     if (booking.status === BookingStatus.AWAITING_PAYMENT) {
@@ -815,7 +954,43 @@ bookingsRoutes.post(
       throw new AppError("Selected driver has an overlapping trip", 409, "OVERLAPPING_BOOKING");
     }
 
+    if (!booking.payment) {
+      throw new AppError("Payment authorization is missing", 409, "PAYMENT_NOT_AUTHORIZED");
+    }
+
+    // Keep Stripe outside the database transaction; the idempotency key makes
+    // a retry safe if the booking changes before the row lock is acquired.
+    const capturedIntent = await captureAuthorizedBookingPayment(booking.payment);
+
     const updated = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Booking" WHERE id = ${booking.id} FOR UPDATE`;
+      const current = await tx.booking.findUniqueOrThrow({ where: { id: booking.id }, include: { payment: true } });
+      if (current.status !== BookingStatus.PENDING || current.assignedDriverId) {
+        throw new AppError("This booking is no longer available", 409, "BOOKING_UNAVAILABLE");
+      }
+      if (!current.payment) {
+        throw new AppError("Payment authorization is missing", 409, "PAYMENT_NOT_AUTHORIZED");
+      }
+      if (!isPaymentCaptured(current.payment.status)) {
+        if (
+          !capturedIntent ||
+          current.payment.status !== PaymentStatus.AUTHORIZED ||
+          current.payment.stripePaymentIntentId !== capturedIntent.id
+        ) {
+          throw new AppError("Payment authorization is no longer capturable", 409, "PAYMENT_NOT_AUTHORIZED");
+        }
+        const now = new Date();
+        await tx.payment.update({
+          where: { id: current.payment.id },
+          data: {
+            status: PaymentStatus.CAPTURED,
+            capturedAmount: (capturedIntent.amount_received ?? capturedIntent.amount) / 100,
+            capturedAt: current.payment.capturedAt ?? now,
+            recordedAt: current.payment.recordedAt ?? now,
+            notes: "Stripe card authorization captured after admin driver assignment."
+          }
+        });
+      }
       const assigned = await tx.booking.update({
         where: { id: booking.id },
         data: {
@@ -910,7 +1085,7 @@ bookingsRoutes.post(
       throw new AppError("Ratings are only available after trip completion", 409, "TRIP_NOT_COMPLETED");
     }
 
-    if (booking.payment?.status !== "RECORDED") {
+    if (!isPaymentCaptured(booking.payment?.status)) {
       throw new AppError("Ratings are only available after a paid trip is completed", 409, "PAYMENT_REQUIRED");
     }
 

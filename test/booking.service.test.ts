@@ -6,8 +6,29 @@ import {
   mapStateForBooking,
   windowsOverlap
 } from "../src/modules/bookings/booking.service.js";
+import { isTripExtensionReminderDue, paidTripEndAt } from "../src/modules/trips/trip-lifecycle.service.js";
 
 describe("booking.service", () => {
+  it("does not offer a paid extension more than fifteen minutes before expiry", () => {
+    const now = new Date("2026-10-03T10:00:00.000Z");
+    const endsAt = new Date("2026-10-03T10:15:01.000Z");
+
+    expect(isTripExtensionReminderDue(endsAt, now)).toBe(false);
+  });
+
+  it("offers a paid extension when fifteen minutes remain", () => {
+    const now = new Date("2026-10-03T10:00:00.000Z");
+    const endsAt = new Date("2026-10-03T10:15:00.000Z");
+
+    expect(isTripExtensionReminderDue(endsAt, now)).toBe(true);
+  });
+
+  it("calculates the exact paid trip end time from the booked duration", () => {
+    const startedAt = new Date("2026-10-03T10:00:00.000Z");
+
+    expect(paidTripEndAt(startedAt, 120).toISOString()).toBe("2026-10-03T12:00:00.000Z");
+  });
+
   it("detects overlapping trip windows", () => {
     const firstStart = new Date("2026-03-19T10:00:00.000Z");
     const firstEnd = new Date("2026-03-19T11:00:00.000Z");

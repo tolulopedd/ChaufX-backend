@@ -15,6 +15,20 @@ const createTripMessageSchema = z.object({
   body: z.string().trim().min(1).max(500)
 });
 
+const personalContactPatterns = [
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+  /(?:\+?\d[\s().-]*){7,}/,
+  /\b(?:https?:\/\/|www\.)\S+/i,
+  /\b(?:[a-z0-9-]+\.)+(?:com|ca|net|org|io|me|co)\b/i,
+  /@[a-z0-9_]{3,}/i,
+  /\b(?:whats?app|telegram|instagram|insta|snapchat|signal|wechat|facebook|facetime)\b/i,
+  /\b(?:call|text|email|dm)\s+me\b/i
+];
+
+export function containsPersonalContactDetails(body: string) {
+  return personalContactPatterns.some((pattern) => pattern.test(body));
+}
+
 const chatEnabledStatuses: BookingStatus[] = [
   BookingStatus.ACCEPTED,
   BookingStatus.ENROUTE,
@@ -110,6 +124,14 @@ tripMessagesRoutes.post(
     const bookingId = paramValue(request.params.bookingId);
     const booking = await loadChatBooking(bookingId, request.auth!.userId, request.auth!.role);
     const input = createTripMessageSchema.parse(request.body);
+
+    if (containsPersonalContactDetails(input.body)) {
+      throw new AppError(
+        "For your safety, keep communication in ChaufX and do not share phone numbers, email addresses, social handles, or external links.",
+        422,
+        "CONTACT_DETAILS_NOT_ALLOWED"
+      );
+    }
 
     const message = await (prisma as any).tripMessage.create({
       data: {

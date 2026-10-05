@@ -13,6 +13,7 @@ import { locationsRoutes } from "./modules/locations/locations.routes.js";
 import {
   paymentCheckoutCancelHandler,
   paymentCheckoutCompleteHandler,
+  stripeWebhookHandler,
   paymentsRoutes
 } from "./modules/payments/payments.routes.js";
 import {
@@ -36,6 +37,8 @@ export function createApp() {
 
   app.use(helmet());
   app.use(cors());
+  // Stripe signs the exact raw request body, so this must precede express.json().
+  app.post("/api/payments/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
   app.use(express.json({ limit: "25mb" }));
   app.use(express.urlencoded({ extended: true, limit: "25mb" }));
   app.use(morgan("dev"));
@@ -57,9 +60,10 @@ export function createApp() {
   app.use("/api", paymentsRoutes);
   app.use("/api", membershipsRoutes);
   app.use("/api", notificationsRoutes);
-  app.use("/api", adminRoutes);
   app.use("/api", contactMessageRoutes);
   app.use("/api", tripMessagesRoutes);
+  // Admin routes apply an admin-only router middleware, so they must be mounted last.
+  app.use("/api", adminRoutes);
 
   app.use((_request, response) => {
     response.status(404).json({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBookingSchema } from "../src/modules/bookings/bookings.routes.js";
+import { createBookingSchema, validateBookingStartTime } from "../src/modules/bookings/bookings.routes.js";
 
 describe("booking validation", () => {
   it("rejects too-short pickup labels", () => {
@@ -17,5 +17,19 @@ describe("booking validation", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("requires scheduled requests to start at least one hour ahead", () => {
+    const now = new Date("2026-10-03T12:00:00.000Z");
+
+    expect(validateBookingStartTime("LATER", new Date("2026-10-03T12:59:59.999Z"), now)).toBe(false);
+    expect(validateBookingStartTime("LATER", new Date("2026-10-03T13:00:00.000Z"), now)).toBe(true);
+  });
+
+  it("rejects Book Now requests whose start time has already passed", () => {
+    const now = new Date("2026-10-03T12:00:00.000Z");
+
+    expect(validateBookingStartTime("NOW", new Date("2026-10-03T11:59:59.999Z"), now)).toBe(false);
+    expect(validateBookingStartTime("NOW", new Date("2026-10-03T12:00:00.000Z"), now)).toBe(true);
   });
 });

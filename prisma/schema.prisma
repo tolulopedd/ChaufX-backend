@@ -71,9 +71,25 @@ enum TripStatus {
 
 enum PaymentStatus {
   PENDING
+  AUTHORIZED
+  CAPTURED
+  AUTHORIZATION_RELEASED
   RECORDED
   FAILED
   REFUNDED
+}
+
+enum TripExtensionStatus {
+  PENDING
+  RECORDED
+  FAILED
+  CANCELLED
+}
+
+enum CustomerOverageChargeStatus {
+  PENDING
+  APPLIED
+  WAIVED
 }
 
 enum MembershipTier {
@@ -119,6 +135,10 @@ enum NotificationType {
   DRIVER_ACCEPTED
   DRIVER_ARRIVED
   TRIP_STARTED
+  TRIP_STOP_UPDATED
+  TRIP_EXTENSION_AVAILABLE
+  TRIP_EXTENDED
+  TRIP_AUTO_ENDED
   TRIP_COMPLETED
   UPCOMING_TRIP
   APPLICATION_REVIEWED
@@ -210,7 +230,7 @@ model BlogPost {
   publishedAt   DateTime?
   authorId      String?
   createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  updatedAt     DateTime       @default(now()) @updatedAt
 
   author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
 
@@ -241,6 +261,7 @@ model MembershipPayment {
 
   @@index([userId, status])
   @@index([tier, status])
+  @@index([interacInstructionsExpiresAt])
 }
 
 model PushDevice {
@@ -311,6 +332,7 @@ model CustomerProfile {
   user             User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   vehicles         Vehicle[]
   bookings         Booking[]
+  overageCharges   CustomerOverageCharge[]
   identityDocument CustomerIdentityDocument?
 }
 
@@ -387,6 +409,8 @@ model DriverApplication {
   documents     Document[]
   driver        Driver?
   reviewHistory DriverApplicationReviewHistory[]
+
+  @@index([criminalCheckInvitedAt])
 }
 
 model DriverApplicationReviewHistory {
@@ -449,6 +473,7 @@ model Booking {
   specialNotes            String?
   vehicleDetails          String?
   fareEstimate            Float
+  bookedHourlyRate        Float?
   zoneCode                String
   activationWindowStartAt DateTime
   activationWindowEndAt   DateTime
@@ -469,6 +494,9 @@ model Booking {
   dispatches      BookingDispatch[]
   locationUpdates Location[]
   messages        TripMessage[]
+  tripExtensions  TripExtension[]
+  sourceOverageCharge CustomerOverageCharge?   @relation("SourceBookingOverage")
+  appliedOverageCharges CustomerOverageCharge[] @relation("AppliedBookingOverage")
 
   @@index([status, scheduledStartAt])
   @@index([assignedDriverId, status])
@@ -500,16 +528,40 @@ model Trip {
   bookingId           String     @unique
   driverId            String
   status              TripStatus @default(SCHEDULED)
+  arrivedAt           DateTime?
   startedAt           DateTime?
   endedAt             DateTime?
   navigationEnabled   Boolean    @default(false)
   liveTrackingEnabled Boolean    @default(false)
   routePolyline       Json?
+  extensionReminderSentAt DateTime?
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   driver  Driver  @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  stops   TripStop[]
+}
+
+model TripStop {
+  id               String    @id @default(uuid())
+  tripId           String
+  sequence         Int
+  originLabel      String?
+  originLat        Float?
+  originLng        Float?
+  destinationLabel String
+  destinationLat   Float
+  destinationLng   Float
+  setAt            DateTime  @default(now())
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, sequence])
+  @@index([tripId, completedAt])
 }
 
 model Location {
@@ -536,6 +588,13 @@ model Payment {
   currency          String        @default("USD")
   status            PaymentStatus @default(PENDING)
   providerReference String?
+  stripeCheckoutSessionId String? @unique
+  stripePaymentIntentId   String? @unique
+  authorizedAmount        Float?
+  capturedAmount          Float?
+  authorizedAt            DateTime?
+  capturedAt              DateTime?
+  authorizationReleasedAt DateTime?
   interacInstructionsExpiresAt DateTime?
   interacTransferConfirmedAt   DateTime?
   recordedAt        DateTime?
@@ -544,6 +603,49 @@ model Payment {
   updatedAt         DateTime      @updatedAt
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([interacInstructionsExpiresAt])
+}
+
+model TripExtension {
+  id                  String              @id @default(uuid())
+  bookingId           String
+  addedDurationMinutes Int
+  hourlyRate          Float
+  amount              Float
+  currency            String              @default("CAD")
+  status              TripExtensionStatus @default(PENDING)
+  providerReference   String?             @unique
+  recordedAt          DateTime?
+  cancelledAt         DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @default(now()) @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId, status])
+}
+
+model CustomerOverageCharge {
+  id                 String                      @id @default(uuid())
+  customerId         String
+  sourceBookingId    String                      @unique
+  appliedToBookingId String?
+  overtimeMinutes    Int
+  billedHours        Int
+  hourlyRate         Float
+  amount             Float
+  status             CustomerOverageChargeStatus @default(PENDING)
+  appliedAt          DateTime?
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+
+  customer         CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  sourceBooking    Booking         @relation("SourceBookingOverage", fields: [sourceBookingId], references: [id], onDelete: Cascade)
+  appliedToBooking Booking?        @relation("AppliedBookingOverage", fields: [appliedToBookingId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, status])
+  @@index([appliedToBookingId])
 }
 
 model Notification {
@@ -569,7 +671,7 @@ model TripMessage {
   senderUserId String
   body         String
   createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime @default(now()) @updatedAt
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   sender  User    @relation(fields: [senderUserId], references: [id], onDelete: Cascade)
