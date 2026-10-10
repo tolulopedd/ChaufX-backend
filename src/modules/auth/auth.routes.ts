@@ -13,6 +13,9 @@ import { confirmEmailVerificationToken, issueEmailVerificationToken } from "../.
 import { sendTransactionalEmail } from "../../lib/email.js";
 import { env } from "../../config/env.js";
 import { issuePasswordResetToken, readPasswordResetToken, resetPasswordWithToken } from "../../lib/password-reset.js";
+import { requireActiveReferralPartner, validateReferralCode } from "../referrals/referral.service.js";
+
+const optionalReferralCode = z.string().trim().transform(validateReferralCode).optional();
 
 const authLimiter = rateLimit({
   windowMs: 60_000,
@@ -28,7 +31,8 @@ const registerSchema = z.object({
   fullName: z.string().min(2),
   email: z.email(),
   phone: z.string().min(7).optional(),
-  password: z.string().min(8)
+  password: z.string().min(8),
+  referralCode: optionalReferralCode
 });
 
 const loginSchema = z.object({
@@ -64,13 +68,15 @@ const customerVerificationRequestSchema = z.object({
   fullName: z.string().min(2),
   email: z.email(),
   phone: z.string().min(7).optional(),
-  password: z.string().min(8)
+  password: z.string().min(8),
+  referralCode: optionalReferralCode
 });
 
 const driverVerificationRequestSchema = z.object({
   firstName: z.string().min(2),
   lastName: z.string().min(2),
-  email: z.email()
+  email: z.email(),
+  referralCode: optionalReferralCode
 });
 
 const confirmVerificationSchema = z.object({
@@ -166,6 +172,8 @@ authRoutes.post(
       throw new AppError("This email is already attached to a different account.", 409, "EMAIL_EXISTS");
     }
 
+    if (input.referralCode) await requireActiveReferralPartner(input.referralCode);
+
     const emailMeta = await buildAndSendVerificationEmail({
       email: input.email,
       purpose: EmailVerificationPurpose.CUSTOMER_SIGNUP,
@@ -175,7 +183,8 @@ authRoutes.post(
         fullName: input.fullName,
         email: input.email,
         phone: input.phone ?? null,
-        passwordHash: await hashPassword(input.password)
+        passwordHash: await hashPassword(input.password),
+        referralCode: input.referralCode ?? null
       }
     });
 
@@ -209,6 +218,8 @@ authRoutes.post(
       throw new AppError("This email is already attached to a different account.", 409, "EMAIL_EXISTS");
     }
 
+    if (input.referralCode) await requireActiveReferralPartner(input.referralCode);
+
     const emailMeta = await buildAndSendVerificationEmail({
       email: input.email,
       purpose: EmailVerificationPurpose.DRIVER_ONBOARDING,
@@ -217,7 +228,8 @@ authRoutes.post(
       payload: {
         firstName: input.firstName,
         lastName: input.lastName,
-        email: input.email
+        email: input.email,
+        referralCode: input.referralCode ?? null
       }
     });
 
@@ -245,7 +257,8 @@ authRoutes.post(
         fullName: payload.fullName,
         email: payload.email,
         phone: payload.phone ?? undefined,
-        passwordHash: payload.passwordHash
+        passwordHash: payload.passwordHash,
+        referralCode: payload.referralCode ?? undefined
       });
     }
 
@@ -262,6 +275,7 @@ authRoutes.post(
   authLimiter,
   asyncHandler(async (request, response) => {
     const input = registerSchema.parse(request.body);
+    if (input.referralCode) await requireActiveReferralPartner(input.referralCode);
     const session = await registerCustomer(input);
     response.status(201).json(session);
   })
@@ -307,8 +321,14 @@ authRoutes.post(
     }
 
     const user = await prisma.user.findUniqueOrThrow({
-      where: { id: payload.userId }
+      where: { id: payload.userId },
+      include: { driver: { select: { approvedAt: true } } }
     });
+
+    if (user.status !== "ACTIVE" || (user.role === UserRole.DRIVER && !user.driver?.approvedAt)) {
+      await prisma.refreshToken.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } });
+      throw new AppError("This account is no longer active", 401, "ACCOUNT_INACTIVE");
+    }
 
     await prisma.refreshToken.update({
       where: { id: matchedToken.id },

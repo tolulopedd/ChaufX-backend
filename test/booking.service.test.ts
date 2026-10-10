@@ -3,7 +3,10 @@ import {
   findCanadianRegionByCoordinate,
   haversineDistanceKm,
   inferServiceRegion,
+  isDriverReachable,
+  bookingDispatchExpiresAt,
   mapStateForBooking,
+  unacceptedBookingExpiresAt,
   windowsOverlap
 } from "../src/modules/bookings/booking.service.js";
 import { isTripExtensionReminderDue, paidTripEndAt } from "../src/modules/trips/trip-lifecycle.service.js";
@@ -69,6 +72,41 @@ describe("booking.service", () => {
     });
   });
 
+  it("uses the selected pickup province before the device location", () => {
+    const region = inferServiceRegion(
+      "WPG-CENTRAL",
+      "1 King Street, Toronto, Ontario, Canada",
+      undefined,
+      43.6532,
+      -79.3832,
+      49.8951,
+      -97.1384
+    );
+
+    expect(region).toEqual({
+      province: "Ontario",
+      city: "Toronto"
+    });
+  });
+
+  it("falls back from unavailable device coordinates to the customer profile address", () => {
+    const region = inferServiceRegion(
+      "WPG-CENTRAL",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      0,
+      "100 Portage Avenue, Winnipeg, Manitoba, Canada"
+    );
+
+    expect(region).toEqual({
+      province: "Manitoba",
+      city: "Winnipeg"
+    });
+  });
+
   it("maps coordinates outside Winnipeg to the matching Canadian province", () => {
     const region = findCanadianRegionByCoordinate(51.0447, -114.0719);
 
@@ -76,5 +114,47 @@ describe("booking.service", () => {
       province: "Alberta",
       city: undefined
     });
+  });
+
+  it("keeps an online driver reachable through a registered push device while the app is backgrounded", () => {
+    const now = new Date("2026-10-09T12:00:00.000Z");
+    expect(isDriverReachable(null, 1, now)).toBe(true);
+  });
+
+  it("uses heartbeat grace for active drivers without a push token", () => {
+    const now = new Date("2026-10-09T12:00:00.000Z");
+    expect(isDriverReachable(new Date("2026-10-09T11:59:00.000Z"), 0, now)).toBe(true);
+    expect(isDriverReachable(new Date("2026-10-09T11:00:00.000Z"), 0, now)).toBe(false);
+  });
+
+  it("assigns an explicit response deadline to each booking offer", () => {
+    const offeredAt = new Date("2026-10-09T12:00:00.000Z");
+    expect(bookingDispatchExpiresAt(offeredAt).getTime()).toBeGreaterThan(offeredAt.getTime());
+  });
+
+  it("expires Book Now after one hour and scheduled requests after two hours or at their start time", () => {
+    const authorizedAt = new Date("2026-10-10T10:00:00.000Z");
+    const scheduledStartAt = new Date("2026-10-11T10:00:00.000Z");
+
+    expect(unacceptedBookingExpiresAt({
+      requestType: "NOW",
+      scheduledStartAt,
+      authorizedAt,
+      createdAt: authorizedAt
+    }).toISOString()).toBe("2026-10-10T11:00:00.000Z");
+    expect(unacceptedBookingExpiresAt({
+      requestType: "LATER",
+      scheduledStartAt,
+      authorizedAt,
+      createdAt: authorizedAt
+    }).toISOString()).toBe("2026-10-10T12:00:00.000Z");
+
+    const nearerStart = new Date("2026-10-10T11:30:00.000Z");
+    expect(unacceptedBookingExpiresAt({
+      requestType: "LATER",
+      scheduledStartAt: nearerStart,
+      authorizedAt,
+      createdAt: authorizedAt
+    })).toEqual(nearerStart);
   });
 });

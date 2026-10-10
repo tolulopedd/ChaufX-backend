@@ -3,6 +3,7 @@ import {
   DriverApplicationReviewAuthor,
   DriverApplicationReviewEvent,
   EmailVerificationPurpose,
+  ReferralUserType,
   UserRole
 } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -22,6 +23,7 @@ import {
   requireDriverApplicationUpdateToken,
   requireVerifiedEmailToken
 } from "../../lib/email-verification.js";
+import { attributeUserToPartner } from "../referrals/referral.service.js";
 
 function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
@@ -91,13 +93,13 @@ driverOnboardingRoutes.post(
       ? await requireDriverApplicationUpdateToken(input.applicationUpdateToken)
       : null;
 
-    if (!applicationUpdate) {
-      await requireVerifiedEmailToken({
+    const verifiedOnboarding = !applicationUpdate
+      ? await requireVerifiedEmailToken({
         token: input.verificationToken!,
         email: input.email,
         purpose: EmailVerificationPurpose.DRIVER_ONBOARDING
-      });
-    }
+      })
+      : null;
 
     const existingUser = await prisma.user.findFirst({
       where: {
@@ -168,6 +170,14 @@ driverOnboardingRoutes.post(
         }
       });
     }
+
+
+    const verificationPayload = verifiedOnboarding?.payload as { referralCode?: unknown } | null;
+    await attributeUserToPartner({
+      userId: user.id,
+      userType: ReferralUserType.DRIVER,
+      referralCode: typeof verificationPayload?.referralCode === "string" ? verificationPayload.referralCode : undefined
+    });
 
     const application = await prisma.driverApplication.upsert({
       where: {

@@ -1,15 +1,34 @@
-import { BookingDispatchStatus, BookingStatus, PaymentStatus } from "@prisma/client";
+import { BookingDispatchStatus, BookingStatus, MembershipTier, PaymentStatus } from "@prisma/client";
 import { appConfig, buildActivationWindow, isTripWindowActive } from "../../lib/app-config.js";
 import { AppError } from "../../common/AppError.js";
 import { prisma } from "../../lib/prisma.js";
 import { notifyUser, notifyUsers } from "../../lib/notifications.js";
 import { isPaymentAuthorizedForDispatch } from "../payments/payment-status.js";
 import { getActiveMembershipHourlyRate } from "../memberships/membership.service.js";
+import { env } from "../../config/env.js";
+import { getFirstRidePromotionQuote, reserveFirstRidePromotion } from "../promotions/first-ride-promotion.service.js";
 
 const provincePricingPrefix = "PROVINCE::";
 const cityPricingPrefix = "CITY::";
 const fallbackPricingPrefix = "FALLBACK::";
 const fallbackPricingLabel = "Outside configured region";
+const bookNowMatchingWindowMs = 60 * 60_000;
+const scheduledMatchingLeadTimeMs = 2 * 60 * 60_000;
+
+/** The latest point at which an unaccepted authorized booking may remain open. */
+export function unacceptedBookingExpiresAt(input: {
+  requestType: "NOW" | "LATER";
+  scheduledStartAt: Date;
+  authorizedAt: Date | null;
+  createdAt: Date;
+}) {
+  const matchingStartedAt = input.authorizedAt ?? input.createdAt;
+  const matchingWindowMs = input.requestType === "NOW" ? bookNowMatchingWindowMs : scheduledMatchingLeadTimeMs;
+  const matchingDeadline = new Date(matchingStartedAt.getTime() + matchingWindowMs);
+  return input.requestType === "LATER" && input.scheduledStartAt < matchingDeadline
+    ? input.scheduledStartAt
+    : matchingDeadline;
+}
 
 const provinceMatchers: Array<{ province: string; patterns: RegExp[] }> = [
   { province: "Alberta", patterns: [/\balberta\b/i, /\bab\b/i] },
@@ -152,11 +171,9 @@ export function inferServiceRegion(
   pickupLat?: number,
   pickupLng?: number,
   deviceLat?: number,
-  deviceLng?: number
+  deviceLng?: number,
+  profileAddress?: string
 ): ServiceRegion {
-  const deviceRegion = findCanadianRegionByCoordinate(deviceLat, deviceLng);
-  if (deviceRegion) return deviceRegion;
-
   const pickupParts = String(pickupLocation ?? "")
     .split(",")
     .map((part) => part.trim())
@@ -170,14 +187,25 @@ export function inferServiceRegion(
     return pickupRegion;
   }
 
+  // A selected pickup describes where the service is needed, so it wins over
+  // the device's current location (customers may book for another province).
+  const pickupCoordinateRegion = findCanadianRegionByCoordinate(pickupLat, pickupLng);
+  if (pickupCoordinateRegion) return pickupCoordinateRegion;
+
+  const deviceRegion = findCanadianRegionByCoordinate(deviceLat, deviceLng);
+  if (deviceRegion) return deviceRegion;
+
+  const profileRegion = findCanadianRegion(
+    String(profileAddress ?? "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+  );
+  if (profileRegion) return profileRegion;
+
   const destinationRegion = findCanadianRegion(destinationParts);
   if (!pickupParts.length && destinationRegion) {
     return destinationRegion;
-  }
-
-  const coordinateRegion = findCanadianRegionByCoordinate(pickupLat, pickupLng);
-  if (coordinateRegion) {
-    return coordinateRegion;
   }
 
   const pickupCombined = pickupParts.join(", ");
@@ -199,6 +227,17 @@ export async function resolveBookingPricing(params: {
   deviceLat?: number;
   deviceLng?: number;
 }) {
+  const customerUser = params.customerUserId
+    ? await prisma.user.findUnique({
+        where: { id: params.customerUserId },
+        select: {
+          membershipTier: true,
+          membershipStatus: true,
+          membershipHourlyRate: true,
+          customerProfile: { select: { primaryAddress: true } }
+        }
+      })
+    : null;
   const region = inferServiceRegion(
     params.zoneCode,
     params.pickupLocation,
@@ -206,7 +245,8 @@ export async function resolveBookingPricing(params: {
     params.pickupLat,
     params.pickupLng,
     params.deviceLat,
-    params.deviceLng
+    params.deviceLng,
+    customerUser?.customerProfile?.primaryAddress ?? undefined
   );
   const settings = await prisma.pricingSetting.findMany({
     where: {
@@ -228,6 +268,12 @@ export async function resolveBookingPricing(params: {
   let fallbackMinHours = 2;
   let cityFlatFee: number | null = null;
   let cityMinHours: number | null = null;
+  let provinceFlatFeeConfigured = false;
+  let provinceMinHoursConfigured = false;
+  let fallbackFlatFeeConfigured = false;
+  let fallbackMinHoursConfigured = false;
+  let cityFlatFeeConfigured = false;
+  let cityMinHoursConfigured = false;
 
   for (const setting of settings) {
     if (setting.code.startsWith(fallbackPricingPrefix)) {
@@ -235,10 +281,12 @@ export async function resolveBookingPricing(params: {
 
       if (kind === "FLAT_FEE") {
         fallbackFlatFee = setting.value;
+        fallbackFlatFeeConfigured = true;
       }
 
       if (kind === "MIN_HOURS") {
         fallbackMinHours = setting.value;
+        fallbackMinHoursConfigured = true;
       }
     }
 
@@ -252,10 +300,12 @@ export async function resolveBookingPricing(params: {
 
       if (kind === "FLAT_FEE") {
         provinceFlatFee = setting.value;
+        provinceFlatFeeConfigured = true;
       }
 
       if (kind === "MIN_HOURS") {
         provinceMinHours = setting.value;
+        provinceMinHoursConfigured = true;
       }
     }
 
@@ -270,41 +320,45 @@ export async function resolveBookingPricing(params: {
 
       if (kind === "FLAT_FEE") {
         cityFlatFee = setting.value;
+        cityFlatFeeConfigured = true;
       }
 
       if (kind === "MIN_HOURS") {
         cityMinHours = setting.value;
+        cityMinHoursConfigured = true;
       }
     }
   }
 
-  const regionalFlatFee = region.isFallback ? fallbackFlatFee : cityFlatFee ?? provinceFlatFee;
-  const minHours = region.isFallback ? fallbackMinHours : cityMinHours ?? provinceMinHours;
+  const cityPricingConfigured = cityFlatFeeConfigured && cityMinHoursConfigured;
+  const pricingAvailable = region.isFallback
+    ? fallbackFlatFeeConfigured && fallbackMinHoursConfigured
+    : provinceFlatFeeConfigured && provinceMinHoursConfigured;
+  const regionalFlatFee = region.isFallback ? fallbackFlatFee : cityPricingConfigured ? cityFlatFee! : provinceFlatFee;
+  const minHours = region.isFallback ? fallbackMinHours : cityPricingConfigured ? cityMinHours! : provinceMinHours;
   let membershipFlatFee: number | null = null;
-  let membershipTier: string | null = null;
+  let membershipTier: MembershipTier | null = null;
 
-  if (params.customerUserId) {
-    const customerUser = await prisma.user.findUnique({
-      where: { id: params.customerUserId },
-      select: {
-        membershipTier: true,
-        membershipStatus: true,
-        membershipHourlyRate: true
-      }
-    });
-
-    if (customerUser) {
-      membershipTier = customerUser.membershipTier;
-      membershipFlatFee = await getActiveMembershipHourlyRate(customerUser);
-    }
+  if (customerUser) {
+    membershipTier = customerUser.membershipTier;
+    membershipFlatFee = await getActiveMembershipHourlyRate(customerUser);
   }
 
   const flatFee = membershipFlatFee ?? regionalFlatFee;
   const requestedHours = Math.max(1, Math.ceil(params.expectedDurationMinutes / 60));
   const billableHours = Math.max(requestedHours, minHours);
   const baseFareEstimate = Number((regionalFlatFee * billableHours).toFixed(2));
-  const fareEstimate = Number((flatFee * billableHours).toFixed(2));
-  const membershipSavings = membershipFlatFee !== null ? Number(Math.max(0, baseFareEstimate - fareEstimate).toFixed(2)) : 0;
+  const membershipFareEstimate = Number((flatFee * billableHours).toFixed(2));
+  const membershipSavings = membershipFlatFee !== null ? Number(Math.max(0, baseFareEstimate - membershipFareEstimate).toFixed(2)) : 0;
+  const firstRidePromotion = params.customerUserId && membershipTier
+    ? await getFirstRidePromotionQuote({
+        customerUserId: params.customerUserId,
+        fare: membershipFareEstimate,
+        membershipTier,
+        membershipApplied: membershipFlatFee !== null
+      })
+    : { eligible: false, originalFare: membershipFareEstimate, discountAmount: 0, discountedFare: membershipFareEstimate };
+  const fareEstimate = firstRidePromotion.discountedFare;
 
   return {
     province: region.province,
@@ -318,7 +372,12 @@ export async function resolveBookingPricing(params: {
     billableHours,
     fareEstimate,
     baseFareEstimate,
-    membershipSavings
+    membershipSavings,
+    firstRidePromotion,
+    pricingAvailable,
+    pricingUnavailableMessage: pricingAvailable
+      ? undefined
+      : `Pricing is not configured for ${region.isFallback ? "this pickup location" : region.province}.`
   };
 }
 
@@ -369,7 +428,33 @@ function normalizeServiceArea(value?: string | null) {
     .toLowerCase();
 }
 
-const realtimeDispatchFreshnessMinutes = 5;
+const realtimeDispatchFreshnessMinutes = env.DRIVER_REALTIME_LOCATION_FRESHNESS_MINUTES;
+
+export function bookingDispatchExpiresAt(from = new Date()) {
+  return new Date(from.getTime() + env.BOOKING_REQUEST_TIMEOUT_SECONDS * 1000);
+}
+
+export async function expireTimedOutDispatches(bookingId?: string) {
+  const now = new Date();
+  const legacyDeadline = new Date(now.getTime() - env.BOOKING_REQUEST_TIMEOUT_SECONDS * 1000);
+  const result = await prisma.bookingDispatch.updateMany({
+    where: {
+      ...(bookingId ? { bookingId } : {}),
+      status: BookingDispatchStatus.PENDING,
+      OR: [{ expiresAt: { lte: now } }, { expiresAt: null, notifiedAt: { lte: legacyDeadline } }]
+    },
+    data: { status: BookingDispatchStatus.EXPIRED, respondedAt: now }
+  });
+  if (result.count) {
+    console.info("booking_dispatch_expired", JSON.stringify({ bookingId: bookingId ?? null, count: result.count }));
+  }
+  return result.count;
+}
+
+export function isDriverReachable(lastHeartbeatAt: Date | null, activePushDeviceCount: number, now = new Date()) {
+  const heartbeatThreshold = now.getTime() - env.DRIVER_REACHABILITY_GRACE_SECONDS * 1000;
+  return activePushDeviceCount > 0 || Boolean(lastHeartbeatAt && lastHeartbeatAt.getTime() >= heartbeatThreshold);
+}
 const realtimeDispatchRadiusKm = 25;
 
 function driverMatchesServiceArea(
@@ -424,8 +509,11 @@ export async function findEligibleDrivers(
   pickupLocation: string,
   maxDrivers: number = appConfig.driverDispatchFanout
 ) {
-  const freshnessMinutes = requestType === "NOW" ? realtimeDispatchFreshnessMinutes : appConfig.driverLocationFreshnessMinutes;
+  const freshnessMinutes = requestType === "NOW"
+    ? realtimeDispatchFreshnessMinutes
+    : Math.max(appConfig.driverLocationFreshnessMinutes, env.DRIVER_REALTIME_LOCATION_FRESHNESS_MINUTES);
   const freshnessThreshold = new Date(Date.now() - freshnessMinutes * 60_000);
+  const pushThreshold = new Date(Date.now() - env.DRIVER_PUSH_REACHABILITY_DAYS * 24 * 60 * 60_000);
   const drivers = await prisma.driver.findMany({
     where: {
       approvedAt: {
@@ -443,13 +531,22 @@ export async function findEligibleDrivers(
       }
     },
     include: {
-      user: true
+      user: {
+        include: {
+          pushDevices: {
+            where: { appVariant: "driver", disabledAt: null, lastSeenAt: { gte: pushThreshold } },
+            select: { id: true }
+          }
+        }
+      }
     }
   });
 
   const eligible: Array<(typeof drivers)[number] & { distanceKm: number; matchesServiceArea: boolean }> = [];
 
   for (const driver of drivers) {
+    const reachable = isDriverReachable(driver.lastHeartbeatAt, driver.user.pushDevices.length);
+    if (!reachable) continue;
     const overlap = await driverHasOverlap(driver.id, scheduledStartAt, expectedDurationMinutes);
     if (overlap) {
       continue;
@@ -517,6 +614,8 @@ export async function createBookingRecord(input: {
   specialNotes?: string;
   vehicleDetails?: string;
   zoneCode: string;
+  deviceLat?: number;
+  deviceLng?: number;
 }) {
   const activationWindow = buildActivationWindow(input.scheduledStartAt, input.expectedDurationMinutes);
   const pricing = await resolveBookingPricing({
@@ -524,11 +623,19 @@ export async function createBookingRecord(input: {
     expectedDurationMinutes: input.expectedDurationMinutes,
     customerUserId: input.customerUserId,
     pickupLocation: input.pickupLocation,
-    destinationLocation: input.destinationLocation
+    destinationLocation: input.destinationLocation,
+    pickupLat: input.pickupLat,
+    pickupLng: input.pickupLng,
+    deviceLat: input.deviceLat,
+    deviceLng: input.deviceLng
   });
+  if (!pricing.pricingAvailable) {
+    throw new AppError(pricing.pricingUnavailableMessage ?? "Pricing is unavailable for this pickup location.", 409, "PRICING_UNAVAILABLE");
+  }
 
-  const booking = await prisma.booking.create({
-    data: {
+  const booking = await prisma.$transaction(async (tx) => {
+    const created = await tx.booking.create({
+      data: {
         customerId: input.customerId,
         vehicleId: input.vehicleId,
         preferredDriverId: input.preferredDriverId,
@@ -544,11 +651,32 @@ export async function createBookingRecord(input: {
         specialNotes: input.specialNotes,
         vehicleDetails: input.vehicleDetails,
         zoneCode: input.zoneCode,
-        fareEstimate: pricing.fareEstimate,
+        // Reserve the discount in this transaction before exposing the booking.
+        // If another request wins the single first-ride reservation, the booking
+        // falls back to the already-calculated membership/standard fare.
+        fareEstimate: pricing.firstRidePromotion.originalFare,
         bookedHourlyRate: pricing.flatFee,
         activationWindowStartAt: activationWindow.startsAt,
         activationWindowEndAt: activationWindow.endsAt
-    }
+      }
+    });
+
+    const promotion = await reserveFirstRidePromotion(tx, {
+      bookingId: created.id,
+      customerId: input.customerId,
+      membershipTier: pricing.membershipTier ?? MembershipTier.BASIC,
+      membershipApplied: pricing.membershipApplied,
+      fare: pricing.firstRidePromotion.originalFare
+    });
+    if (!promotion.eligible) return created;
+    return tx.booking.update({
+      where: { id: created.id },
+      data: {
+        fareEstimate: promotion.discountedFare,
+        promotionOriginalFare: promotion.originalFare,
+        promotionDiscountAmount: promotion.discountAmount
+      }
+    });
   });
 
   return booking;
@@ -615,6 +743,7 @@ export async function findMatchingAwaitingPaymentBooking(input: {
 }
 
 export async function dispatchBookingToEligibleDrivers(bookingId: string) {
+  await expireTimedOutDispatches(bookingId);
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
     include: {
@@ -687,22 +816,30 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
     : unofferedDrivers.slice(0, appConfig.driverDispatchFanout);
 
   if (drivers.length) {
+    const expiresAt = bookingDispatchExpiresAt();
     await prisma.bookingDispatch.createMany({
       data: drivers.map((driver) => ({
         bookingId: booking.id,
         driverId: driver.id,
         distanceKm: driver.distanceKm,
-        status: BookingDispatchStatus.PENDING
+        status: BookingDispatchStatus.PENDING,
+        expiresAt
       })),
       // Another dispatch attempt may win a race; duplicate offers stay harmless.
       skipDuplicates: true
     });
 
+    const pendingOffers = await prisma.bookingDispatch.findMany({
+      where: { bookingId: booking.id, driverId: { in: drivers.map((driver) => driver.id) }, status: BookingDispatchStatus.PENDING },
+      select: { id: true, driverId: true, expiresAt: true }
+    });
+    const offersByDriverId = new Map(pendingOffers.map((offer) => [offer.driverId, offer]));
+
     await notifyUsers(
-      drivers.map((driver) => ({
+      drivers.filter((driver) => offersByDriverId.has(driver.id)).map((driver) => ({
         userId: driver.userId,
         type: "BOOKING_SUBMITTED" as const,
-        title: booking.requestType === "NOW" ? "ChaufX now request" : "Scheduled drive request",
+        title: "New ChaufX Booking Request",
         body:
           booking.requestType === "NOW"
             ? `${booking.pickupLocation} to ${booking.destinationLocation} · starting soon`
@@ -710,11 +847,16 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
         channel: "PUSH" as const,
         meta: {
           bookingId: booking.id,
+          dispatchId: offersByDriverId.get(driver.id)!.id,
+          expiresAt: offersByDriverId.get(driver.id)!.expiresAt?.toISOString() ?? expiresAt.toISOString(),
           distanceKm: driver.distanceKm,
           requestType: booking.requestType
-        }
+        },
+        dedupeKey: `booking-dispatch:${booking.id}:${driver.id}`
       }))
     );
+
+    console.info("booking_dispatch_created", JSON.stringify({ bookingId: booking.id, offers: pendingOffers.length, expiresAt: expiresAt.toISOString() }));
   }
 
   await notifyUser({
@@ -743,6 +885,7 @@ export async function dispatchBookingToEligibleDrivers(bookingId: string) {
  * being sent again.
  */
 export async function dispatchOutstandingPaidBookings(limit: number = 25) {
+  await expireTimedOutDispatches();
   const bookings = await prisma.booking.findMany({
     where: {
       status: {

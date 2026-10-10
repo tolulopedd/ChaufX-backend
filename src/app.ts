@@ -27,9 +27,15 @@ import { blogRoutes } from "./modules/blog/blog.routes.js";
 import { contactMessageRoutes } from "./modules/contact-messages/contact-messages.routes.js";
 import { tripMessagesRoutes } from "./modules/trip-messages/trip-messages.routes.js";
 import { errorMiddleware } from "./middleware/error.js";
+import { referralAdminRoutes } from "./modules/referrals/referral-admin.routes.js";
 
 export function createApp() {
   const app = express();
+
+  // Prisma relations can contain the credential field when they are included
+  // for server-side authorization or notification work. It must never reach
+  // any API client, regardless of the route that serialized the relation.
+  app.set("json replacer", (key: string, value: unknown) => (key === "passwordHash" ? undefined : value));
 
   // Render forwards client IPs through X-Forwarded-* headers, so Express
   // needs to trust the first proxy hop for rate limiting and auth logging.
@@ -62,6 +68,7 @@ export function createApp() {
   app.use("/api", notificationsRoutes);
   app.use("/api", contactMessageRoutes);
   app.use("/api", tripMessagesRoutes);
+  app.use("/api", referralAdminRoutes);
   // Admin routes apply an admin-only router middleware, so they must be mounted last.
   app.use("/api", adminRoutes);
 

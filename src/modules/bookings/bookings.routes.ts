@@ -9,6 +9,7 @@ import { AppError } from "../../common/AppError.js";
 import {
   createBookingRecord,
   dispatchBookingToEligibleDrivers,
+  expireTimedOutDispatches,
   driverHasOverlap,
   ensureCustomerCanCancel,
   findEligibleDrivers,
@@ -20,6 +21,8 @@ import { notifyUser, notifyUsers } from "../../lib/notifications.js";
 import { isEligibleCustomerAge } from "../../lib/customer-age.js";
 import { cancelStripePaymentIntent, captureStripePaymentIntent, expireStripeCheckoutSession } from "../payments/payments.routes.js";
 import { isPaymentCaptured } from "../payments/payment-status.js";
+import { env } from "../../config/env.js";
+import { releaseFirstRidePromotion } from "../promotions/first-ride-promotion.service.js";
 
 export const createBookingSchema = z.object({
   vehicleId: z.string().uuid().optional(),
@@ -244,16 +247,16 @@ bookingsRoutes.post(
       expectedDurationMinutes: input.expectedDurationMinutes,
       customerUserId: request.auth!.userId,
       pickupLocation: input.pickupLocation,
-        destinationLocation: input.destinationLocation,
-        pickupLat: input.pickupLat,
-        pickupLng: input.pickupLng,
-        deviceLat: input.deviceLat,
-        deviceLng: input.deviceLng
-      });
+      destinationLocation: input.destinationLocation,
+      pickupLat: input.pickupLat,
+      pickupLng: input.pickupLng,
+      deviceLat: input.deviceLat,
+      deviceLng: input.deviceLng
+    });
     const pricingRateLabel = pricing.membershipApplied ? "membership rate" : "rate";
     response.json({
-      fareEstimate: pricing.fareEstimate,
-      serviceFareEstimate: pricing.fareEstimate,
+      fareEstimate: pricing.pricingAvailable ? pricing.fareEstimate : null,
+      serviceFareEstimate: pricing.pricingAvailable ? pricing.fareEstimate : null,
       carriedOverageAmount: 0,
       carriedOverageHours: 0,
       currency: "CAD",
@@ -265,9 +268,18 @@ bookingsRoutes.post(
       pricingProvince: pricing.province,
       pricingCity: pricing.city,
       pricingMembershipTier: pricing.membershipTier,
+      pricingAvailable: pricing.pricingAvailable,
+      pricingUnavailableMessage: pricing.pricingUnavailableMessage,
       membershipApplied: pricing.membershipApplied,
       baseFareEstimate: pricing.baseFareEstimate,
       membershipSavings: pricing.membershipSavings,
+      promotionOriginalFare: pricing.firstRidePromotion.originalFare,
+      promotionDiscountAmount: pricing.firstRidePromotion.discountAmount,
+      firstRidePromotion: {
+        eligible: pricing.firstRidePromotion.eligible,
+        amountSaved: pricing.firstRidePromotion.discountAmount,
+        reason: pricing.firstRidePromotion.reason
+      },
       activationWindowStartAt: activationWindow.startsAt.toISOString(),
       activationWindowEndAt: activationWindow.endsAt.toISOString(),
       pricingNote: `All rates are billed in CAD. ${pricing.billableHours} hour${pricing.billableHours === 1 ? "" : "s"} billed at $${pricing.flatFee}/hour ${pricingRateLabel}. No surge pricing is applied after booking confirmation.`
@@ -304,12 +316,15 @@ bookingsRoutes.post(
       expectedDurationMinutes: input.expectedDurationMinutes,
       customerUserId: request.auth!.userId,
       pickupLocation: input.pickupLocation,
-        destinationLocation: input.destinationLocation,
-        pickupLat: input.pickupLat,
-        pickupLng: input.pickupLng,
-        deviceLat: input.deviceLat,
-        deviceLng: input.deviceLng
-      });
+      destinationLocation: input.destinationLocation,
+      pickupLat: input.pickupLat,
+      pickupLng: input.pickupLng,
+      deviceLat: input.deviceLat,
+      deviceLng: input.deviceLng
+    });
+    if (!pricing.pricingAvailable) {
+      throw new AppError(pricing.pricingUnavailableMessage ?? "Pricing is unavailable for this pickup location.", 409, "PRICING_UNAVAILABLE");
+    }
     const existingBooking = await findMatchingAwaitingPaymentBooking({
       customerId: customer.id,
       ...input
@@ -486,6 +501,7 @@ bookingsRoutes.get(
     }
 
     if (request.auth!.role === "driver") {
+      await expireTimedOutDispatches();
       const driver = await prisma.driver.findUniqueOrThrow({
         where: { userId: request.auth!.userId }
       });
@@ -618,6 +634,12 @@ bookingsRoutes.post(
       where: { userId: request.auth!.userId }
     });
 
+    if (!driver.availabilityStatus) {
+      throw new AppError("Go Online before accepting a booking request", 409, "DRIVER_OFFLINE");
+    }
+
+    await expireTimedOutDispatches(bookingId);
+
     const booking = await prisma.booking.findUniqueOrThrow({
       where: { id: bookingId },
       include: { payment: true }
@@ -631,18 +653,6 @@ bookingsRoutes.post(
       throw new AppError("This booking is no longer available", 409, "BOOKING_UNAVAILABLE");
     }
 
-    const dispatch = await prisma.bookingDispatch.findFirst({
-      where: {
-        bookingId: booking.id,
-        driverId: driver.id,
-        status: BookingDispatchStatus.PENDING
-      }
-    });
-
-    if (!dispatch) {
-      throw new AppError("This request is no longer routed to you", 403, "BOOKING_NOT_ROUTED");
-    }
-
     const overlap = await driverHasOverlap(driver.id, booking.scheduledStartAt, booking.expectedDurationMinutes);
     if (overlap) {
       throw new AppError("This trip overlaps with another accepted assignment", 409, "OVERLAPPING_BOOKING");
@@ -652,10 +662,37 @@ bookingsRoutes.post(
       throw new AppError("Payment authorization is missing", 409, "PAYMENT_NOT_AUTHORIZED");
     }
 
+    const offerClaimedAt = new Date();
+    const dispatch = await prisma.bookingDispatch.updateMany({
+      where: {
+        bookingId: booking.id,
+        driverId: driver.id,
+        status: BookingDispatchStatus.PENDING,
+        OR: [
+          { expiresAt: { gt: offerClaimedAt } },
+          { expiresAt: null, notifiedAt: { gt: new Date(offerClaimedAt.getTime() - env.BOOKING_REQUEST_TIMEOUT_SECONDS * 1000) } }
+        ]
+      },
+      data: { status: BookingDispatchStatus.ACCEPTED, respondedAt: offerClaimedAt }
+    });
+
+    if (!dispatch.count) {
+      throw new AppError("This booking request has expired or is no longer routed to you", 409, "BOOKING_REQUEST_EXPIRED");
+    }
+
     // Stripe calls can take several seconds. Complete the idempotent capture
     // before opening the database transaction so a remote request never holds
     // the booking row lock or exhausts Prisma's transaction timeout.
-    const capturedIntent = await captureAuthorizedBookingPayment(booking.payment);
+    let capturedIntent;
+    try {
+      capturedIntent = await captureAuthorizedBookingPayment(booking.payment);
+    } catch (error) {
+      await prisma.bookingDispatch.updateMany({
+        where: { bookingId: booking.id, driverId: driver.id, status: BookingDispatchStatus.ACCEPTED },
+        data: { status: BookingDispatchStatus.PENDING, respondedAt: null }
+      });
+      throw error;
+    }
 
     const updatedBooking = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "Booking" WHERE id = ${booking.id} FOR UPDATE`;
@@ -665,6 +702,16 @@ bookingsRoutes.post(
       });
       if (current.status !== BookingStatus.PENDING || current.assignedDriverId) {
         throw new AppError("This booking is no longer available", 409, "BOOKING_UNAVAILABLE");
+      }
+      const activeOffer = await tx.bookingDispatch.findFirst({
+        where: {
+          bookingId: booking.id,
+          driverId: driver.id,
+          status: BookingDispatchStatus.ACCEPTED
+        }
+      });
+      if (!activeOffer) {
+        throw new AppError("This booking request is no longer assigned to you", 409, "BOOKING_REQUEST_EXPIRED");
       }
       if (!current.payment) {
         throw new AppError("Payment authorization is missing", 409, "PAYMENT_NOT_AUTHORIZED");
@@ -774,6 +821,8 @@ bookingsRoutes.post(
       entityId: booking.id
     });
 
+    console.info("booking_dispatch_response", JSON.stringify({ bookingId: booking.id, driverId: driver.id, response: "accepted" }));
+
     response.json(updatedBooking);
   })
 );
@@ -807,6 +856,8 @@ bookingsRoutes.post(
     // state and immediately move on to the next eligible driver when the
     // current dispatch batch has no pending offers left.
     await dispatchBookingToEligibleDrivers(bookingId);
+
+    console.info("booking_dispatch_response", JSON.stringify({ bookingId, driverId: driver.id, response: "declined" }));
 
     response.json({
       success: true,
@@ -923,6 +974,8 @@ bookingsRoutes.post(
           appliedToBookingId: null
         }
       });
+
+      await releaseFirstRidePromotion(tx, bookingId);
 
       return cancelledBooking;
     });

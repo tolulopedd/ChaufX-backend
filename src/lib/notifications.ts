@@ -11,6 +11,7 @@ type NotifyUserParams = {
   channel: NotificationChannel;
   status?: NotificationStatus;
   meta?: NotificationMeta;
+  dedupeKey?: string;
 };
 
 type ExpoTicket = {
@@ -58,6 +59,7 @@ async function deliverPushNotification(notificationId: string) {
   });
 
   if (!devices.length) {
+    console.info("notification_delivery", JSON.stringify({ notificationId, userId: notification.userId, outcome: "no_active_device" }));
     return;
   }
 
@@ -66,6 +68,11 @@ async function deliverPushNotification(notificationId: string) {
       ? notification.meta
       : {};
 
+  const expiresAt = typeof (dataPayload as Record<string, unknown>).expiresAt === "string"
+    ? new Date((dataPayload as Record<string, string>).expiresAt).getTime()
+    : null;
+  const ttl = expiresAt && Number.isFinite(expiresAt) ? Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)) : undefined;
+  const bookingRequest = notification.type === "BOOKING_SUBMITTED" && Boolean((dataPayload as Record<string, unknown>).dispatchId);
   const tickets = await sendExpoPush(
     devices.map((device) => ({
       to: device.expoPushToken,
@@ -73,7 +80,9 @@ async function deliverPushNotification(notificationId: string) {
       title: notification.title,
       body: notification.body,
       priority: "high",
-      channelId: "default",
+      channelId: bookingRequest ? "booking-requests" : "default",
+      categoryId: bookingRequest ? "BOOKING_REQUEST" : undefined,
+      ttl,
       data: {
         notificationId: notification.id,
         type: notification.type,
@@ -100,6 +109,16 @@ async function deliverPushNotification(notificationId: string) {
     });
   }
 
+  const successfulDeliveries = tickets.filter((ticket) => ticket?.status === "ok").length;
+  console.info(
+    "notification_delivery",
+    JSON.stringify({ notificationId, userId: notification.userId, devices: devices.length, successfulDeliveries, invalidTokens: invalidTokens.length })
+  );
+
+  if (!successfulDeliveries) {
+    throw new Error(`Push notification ${notification.id} was not accepted by any registered device`);
+  }
+
   await prisma.notification.update({
     where: { id: notification.id },
     data: {
@@ -109,17 +128,30 @@ async function deliverPushNotification(notificationId: string) {
 }
 
 export async function notifyUser(params: NotifyUserParams) {
-  const notification = await prisma.notification.create({
-    data: {
-      userId: params.userId,
-      type: params.type,
-      title: params.title,
-      body: params.body,
-      channel: params.channel,
-      status: params.status ?? (params.channel === NotificationChannel.PUSH ? NotificationStatus.PENDING : NotificationStatus.SENT),
-      meta: params.meta
+  let notification;
+  try {
+    notification = await prisma.notification.create({
+      data: {
+        userId: params.userId,
+        type: params.type,
+        title: params.title,
+        body: params.body,
+        channel: params.channel,
+        status: params.status ?? (params.channel === NotificationChannel.PUSH ? NotificationStatus.PENDING : NotificationStatus.SENT),
+        meta: params.meta,
+        dedupeKey: params.dedupeKey
+      }
+    });
+  } catch (error) {
+    if (params.dedupeKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const existing = await prisma.notification.findUnique({ where: { dedupeKey: params.dedupeKey } });
+      if (existing) {
+        console.info("notification_deduplicated", JSON.stringify({ dedupeKey: params.dedupeKey, notificationId: existing.id }));
+        return existing;
+      }
     }
-  });
+    throw error;
+  }
 
   if (params.channel === NotificationChannel.PUSH) {
     await deliverPushNotification(notification.id).catch((error) => {
@@ -133,4 +165,30 @@ export async function notifyUser(params: NotifyUserParams) {
 export async function notifyUsers(params: NotifyUserParams[]) {
   const notifications = await Promise.all(params.map((item) => notifyUser(item)));
   return notifications;
+}
+
+export async function retryPendingPushNotifications(limit = 50) {
+  const pending = await prisma.notification.findMany({
+    where: {
+      channel: NotificationChannel.PUSH,
+      status: NotificationStatus.PENDING,
+      createdAt: { gte: new Date(Date.now() - 5 * 60_000) }
+    },
+    orderBy: { createdAt: "asc" },
+    take: limit
+  });
+
+  for (const notification of pending) {
+    const meta = notification.meta && typeof notification.meta === "object" && !Array.isArray(notification.meta)
+      ? notification.meta as Record<string, unknown>
+      : {};
+    const expiresAt = typeof meta.expiresAt === "string" ? new Date(meta.expiresAt).getTime() : null;
+    if (expiresAt && expiresAt <= Date.now()) {
+      await prisma.notification.update({ where: { id: notification.id }, data: { status: NotificationStatus.SENT } });
+      continue;
+    }
+    await deliverPushNotification(notification.id).catch((error) => {
+      console.error("notification_retry_failure", JSON.stringify({ notificationId: notification.id, message: error instanceof Error ? error.message : "Unknown error" }));
+    });
+  }
 }

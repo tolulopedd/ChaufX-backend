@@ -7,6 +7,7 @@ import {
   MembershipStatus,
   MembershipTier,
   PaymentStatus,
+  PromotionDiscountType,
   TripStatus,
   UserRole,
   type Prisma
@@ -33,6 +34,7 @@ import {
 } from "../../lib/email-verification.js";
 import { EmailVerificationPurpose } from "@prisma/client";
 import { calculateBookingSettlement } from "../settlements/settlement-calculation.js";
+import { firstRidePromotionConfigId } from "../promotions/first-ride-promotion.service.js";
 
 export const adminRoutes = Router();
 
@@ -404,7 +406,7 @@ adminRoutes.get(
     const applications = await prisma.driverApplication.findMany({
       include: {
         documents: true,
-        user: true,
+        user: { include: { referralAttribution: { include: { partner: true } } } },
         reviewHistory: {
           orderBy: { createdAt: "asc" }
         }
@@ -820,7 +822,7 @@ adminRoutes.get(
   asyncHandler(async (_request, response) => {
     const drivers = await prisma.driver.findMany({
       include: {
-        user: true,
+        user: { include: { referralAttribution: { include: { partner: true } } } },
         bookings: {
           where: {
             status: {
@@ -840,6 +842,7 @@ adminRoutes.get(
   asyncHandler(async (_request, response) => {
     const users = await prisma.user.findMany({
       include: {
+        referralAttribution: { include: { partner: true } },
         customerProfile: {
           include: {
             vehicles: true,
@@ -948,6 +951,7 @@ adminRoutes.post(
       return tx.user.findUniqueOrThrow({
         where: { id: user.id },
         include: {
+          referralAttribution: { include: { partner: true } },
           customerProfile: {
             include: {
               vehicles: true,
@@ -1121,6 +1125,7 @@ adminRoutes.patch(
       return tx.user.findUniqueOrThrow({
         where: { id: userId },
         include: {
+          referralAttribution: { include: { partner: true } },
           customerProfile: {
             include: {
               vehicles: true,
@@ -2222,5 +2227,60 @@ adminRoutes.post(
       fallbackPricing: parseFallbackPricing(pricing),
       settlementConfig: parseSettlementConfig(pricing)
     });
+  })
+);
+
+adminRoutes.get(
+  "/admin/promotions/first-ride",
+  asyncHandler(async (_request, response) => {
+    const config = await prisma.firstRidePromotionConfig.findUnique({ where: { id: firstRidePromotionConfigId } });
+    response.json({
+      config: config ?? {
+        id: firstRidePromotionConfigId,
+        enabled: false,
+        discountType: PromotionDiscountType.FIXED_AMOUNT,
+        discountValue: 0,
+        maxDiscountAmount: null,
+        minimumBookingAmount: 0,
+        startsAt: null,
+        endsAt: null,
+        usageLimit: null,
+        usageCount: 0,
+        eligibleMembershipTiers: [],
+        combineWithMembershipRates: true
+      }
+    });
+  })
+);
+
+adminRoutes.put(
+  "/admin/promotions/first-ride",
+  asyncHandler(async (request, response) => {
+    const input = z.object({
+      enabled: z.boolean(),
+      discountType: z.nativeEnum(PromotionDiscountType),
+      discountValue: z.coerce.number().min(0).max(10000),
+      maxDiscountAmount: z.coerce.number().positive().max(10000).nullable().optional(),
+      minimumBookingAmount: z.coerce.number().min(0).max(100000),
+      startsAt: z.coerce.date().nullable().optional(),
+      endsAt: z.coerce.date().nullable().optional(),
+      usageLimit: z.coerce.number().int().positive().max(1000000).nullable().optional(),
+      eligibleMembershipTiers: z.array(z.nativeEnum(MembershipTier)).default([]),
+      combineWithMembershipRates: z.boolean()
+    }).superRefine((value, ctx) => {
+      if (value.discountType === PromotionDiscountType.PERCENTAGE && value.discountValue > 100) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Percentage discounts cannot exceed 100%." });
+      }
+      if (value.startsAt && value.endsAt && value.endsAt <= value.startsAt) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "End date must be after the start date." });
+      }
+    }).parse(request.body);
+    const config = await prisma.firstRidePromotionConfig.upsert({
+      where: { id: firstRidePromotionConfigId },
+      create: { id: firstRidePromotionConfigId, ...input },
+      update: input
+    });
+    await createAuditLog({ actorId: request.auth!.userId, action: "admin.first_ride_promotion.updated", entityType: "FirstRidePromotionConfig", entityId: config.id, details: { enabled: config.enabled, discountType: config.discountType, discountValue: config.discountValue } });
+    response.json({ config });
   })
 );

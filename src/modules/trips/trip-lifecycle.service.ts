@@ -1,6 +1,7 @@
 import { BookingStatus, TripStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { notifyUsers } from "../../lib/notifications.js";
+import { redeemFirstRidePromotion } from "../promotions/first-ride-promotion.service.js";
 
 type ActiveTripBooking = Awaited<ReturnType<typeof findActiveTripBooking>>;
 
@@ -42,7 +43,7 @@ export async function completePaidTrip(bookingId: string, endedAt = new Date()) 
       data: { completedAt: endedAt }
     });
 
-    return tx.booking.update({
+    const completed = await tx.booking.update({
       where: { id: booking.id },
       data: {
         status: BookingStatus.COMPLETED,
@@ -58,6 +59,8 @@ export async function completePaidTrip(bookingId: string, endedAt = new Date()) 
       },
       include: { trip: true, payment: true }
     });
+    await redeemFirstRidePromotion(tx, booking.id, endedAt);
+    return completed;
   });
 
   return { booking, updated };

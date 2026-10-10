@@ -4,8 +4,9 @@ import { z } from "zod";
 import { asyncHandler } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
-import { dispatchOutstandingPaidBookings } from "../bookings/booking.service.js";
+import { dispatchOutstandingPaidBookings, expireTimedOutDispatches } from "../bookings/booking.service.js";
 import { calculateBookingSettlement } from "../settlements/settlement-calculation.js";
+import { env } from "../../config/env.js";
 
 export const driversRoutes = Router();
 
@@ -352,7 +353,8 @@ driversRoutes.patch(
     const driver = await prisma.driver.update({
       where: { userId: request.auth!.userId },
       data: {
-        availabilityStatus
+        availabilityStatus,
+        ...(availabilityStatus ? { lastHeartbeatAt: new Date() } : {})
       }
     });
 
@@ -361,6 +363,21 @@ driversRoutes.patch(
     }
 
     response.json(driver);
+  })
+);
+
+driversRoutes.post(
+  "/drivers/me/heartbeat",
+  requireRole(["driver"]),
+  asyncHandler(async (request, response) => {
+    const now = new Date();
+    const driver = await prisma.driver.update({
+      where: { userId: request.auth!.userId },
+      data: { lastHeartbeatAt: now },
+      select: { id: true, availabilityStatus: true, lastHeartbeatAt: true }
+    });
+
+    response.json({ ...driver, recommendedIntervalSeconds: env.DRIVER_HEARTBEAT_INTERVAL_SECONDS });
   })
 );
 
@@ -387,6 +404,7 @@ driversRoutes.patch(
         currentLatitude: input.latitude,
         currentLongitude: input.longitude,
         locationUpdatedAt: new Date(),
+        lastHeartbeatAt: new Date(),
         currentZoneId: zone?.id
       }
     });
@@ -403,6 +421,7 @@ driversRoutes.get(
   "/drivers/available-requests",
   requireRole(["driver"]),
   asyncHandler(async (request, response) => {
+    await expireTimedOutDispatches();
     const driver = await prisma.driver.findUniqueOrThrow({
       where: { userId: request.auth!.userId }
     });

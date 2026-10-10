@@ -8,11 +8,13 @@ import { asyncHandler, paramValue } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import {
-  dispatchBookingToEligibleDrivers
+  dispatchBookingToEligibleDrivers,
+  unacceptedBookingExpiresAt
 } from "../bookings/booking.service.js";
 import { notifyUsers } from "../../lib/notifications.js";
 import { isPaymentAuthorizedForDispatch, isPaymentCaptured } from "./payment-status.js";
 import { safeCheckoutReturnUrl } from "./checkout-return-url.js";
+import { releaseFirstRidePromotion } from "../promotions/first-ride-promotion.service.js";
 
 export const paymentsRoutes = Router();
 
@@ -514,14 +516,40 @@ export const stripeWebhookHandler = asyncHandler(async (request, response) => {
   response.json({ received: true });
 });
 
-/** Releases card holds for unaccepted requests two hours after their scheduled start. */
+/** Releases holds after one hour of Book Now matching, or two hours of scheduled matching (whichever comes first before the scheduled start). */
 export async function releaseExpiredAuthorizedBookings(limit: number = 25) {
+  const now = new Date();
+  const bookNowExpiry = new Date(now.getTime() - 60 * 60_000);
+  const scheduledExpiry = new Date(now.getTime() - 2 * 60 * 60_000);
   const candidates = await prisma.booking.findMany({
     where: {
       status: { in: [BookingStatus.AWAITING_PAYMENT, BookingStatus.PENDING] },
       assignedDriverId: null,
-      scheduledStartAt: { lte: new Date(Date.now() - 2 * 60 * 60 * 1000) },
-      payment: { is: { status: PaymentStatus.AUTHORIZED } }
+      payment: { is: { status: PaymentStatus.AUTHORIZED } },
+      OR: [
+        {
+          requestType: "NOW",
+          payment: {
+            is: {
+              status: PaymentStatus.AUTHORIZED,
+              OR: [{ authorizedAt: { lte: bookNowExpiry } }, { authorizedAt: null, createdAt: { lte: bookNowExpiry } }]
+            }
+          }
+        },
+        {
+          requestType: "LATER",
+          OR: [
+            { scheduledStartAt: { lte: now } },
+            {
+              payment: {
+                is: {
+                  OR: [{ authorizedAt: { lte: scheduledExpiry } }, { authorizedAt: null, createdAt: { lte: scheduledExpiry } }]
+                }
+              }
+            }
+          ]
+        }
+      ]
     },
     include: { payment: true, customer: { select: { userId: true } } },
     take: limit,
@@ -529,6 +557,12 @@ export async function releaseExpiredAuthorizedBookings(limit: number = 25) {
   });
 
   for (const candidate of candidates) {
+    if (unacceptedBookingExpiresAt({
+      requestType: candidate.requestType,
+      scheduledStartAt: candidate.scheduledStartAt,
+      authorizedAt: candidate.payment?.authorizedAt ?? null,
+      createdAt: candidate.createdAt
+    }) > now) continue;
     if (!candidate.payment?.stripePaymentIntentId) {
       continue;
     }
@@ -553,6 +587,7 @@ export async function releaseExpiredAuthorizedBookings(limit: number = 25) {
         data: { status: PaymentStatus.AUTHORIZATION_RELEASED, authorizationReleasedAt: now, notes: "Card authorization released because no driver accepted within two hours." }
       });
       await tx.booking.update({ where: { id: booking.id }, data: { status: BookingStatus.CANCELLED, cancelledAt: now } });
+      await releaseFirstRidePromotion(tx, booking.id);
       await tx.bookingDispatch.updateMany({
         where: { bookingId: booking.id, status: "PENDING" },
         data: { status: "EXPIRED", respondedAt: now }
@@ -816,7 +851,11 @@ paymentsRoutes.post(
       amount: booking.fareEstimate,
       currency: "CAD",
       customerEmail: booking.customer.user.email,
-      description: `${booking.pickupLocation} to ${booking.destinationLocation}.`,
+      description:
+        `${booking.pickupLocation} to ${booking.destinationLocation}.` +
+        (booking.promotionDiscountAmount > 0
+          ? ` First Ride Discount Applied: -$${Number(booking.promotionDiscountAmount).toFixed(2)} CAD.`
+          : ""),
       successReturnUrl: input.successReturnUrl,
       cancelReturnUrl: input.cancelReturnUrl,
       manualCapture: true,

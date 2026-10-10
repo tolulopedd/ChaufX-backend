@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { ZodError } from "zod";
 import { AppError } from "../common/AppError.js";
 
 function normalizeDatabaseMismatchMessage(message: string) {
@@ -12,12 +13,40 @@ function normalizeDatabaseMismatchMessage(message: string) {
   return message;
 }
 
-export function errorMiddleware(error: unknown, _request: Request, response: Response, _next: NextFunction) {
+export function errorMiddleware(error: unknown, request: Request, response: Response, _next: NextFunction) {
+  console.error(
+    "request_failure",
+    JSON.stringify({
+      method: request.method,
+      path: request.path,
+      userId: request.auth?.userId ?? null,
+      code: error instanceof AppError ? error.code : "INTERNAL_SERVER_ERROR",
+      message: error instanceof Error ? error.message : "Unexpected error"
+    })
+  );
   if (error instanceof AppError) {
     return response.status(error.statusCode).json({
       error: {
         code: error.code,
         message: error.message
+      }
+    });
+  }
+
+  if (error instanceof ZodError) {
+    const issue = error.issues[0];
+    const field = issue?.path.join(".");
+    const message =
+      field === "password" && issue?.code === "too_small"
+        ? "Password must be at least 8 characters."
+        : field === "email"
+          ? "Enter a valid email address."
+          : "Please check the information entered and try again.";
+
+    return response.status(400).json({
+      error: {
+        code: "VALIDATION_ERROR",
+        message
       }
     });
   }

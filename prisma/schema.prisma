@@ -25,6 +25,16 @@ enum AccountStatus {
   DISABLED
 }
 
+enum ReferralPartnerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ReferralUserType {
+  CUSTOMER
+  DRIVER
+}
+
 enum DriverApplicationStatus {
   AWAITING_DRIVER_ABSTRACT
   SUBMITTED
@@ -97,6 +107,17 @@ enum MembershipTier {
   PLUS
   CONCIERGE
   CORPORATE
+}
+
+enum PromotionDiscountType {
+  FIXED_AMOUNT
+  PERCENTAGE
+}
+
+enum FirstRidePromotionRedemptionStatus {
+  RESERVED
+  REDEEMED
+  RELEASED
 }
 
 enum MembershipStatus {
@@ -217,6 +238,40 @@ model User {
   membershipPayments   MembershipPayment[]
   blogPostsAuthored    BlogPost[]
   tripMessagesSent     TripMessage[]
+  referralAttribution ReferralAttribution?
+}
+
+model ReferralPartner {
+  id          String                @id @default(uuid())
+  name        String
+  contactName String
+  email       String
+  phone       String?
+  code        String                @unique
+  status      ReferralPartnerStatus @default(ACTIVE)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  referrals ReferralAttribution[]
+
+  @@index([status, createdAt])
+}
+
+model ReferralAttribution {
+  id           String           @id @default(uuid())
+  partnerId    String
+  userId       String           @unique
+  userType     ReferralUserType
+  referralCode String
+  registeredAt DateTime         @default(now())
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  partner ReferralPartner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId, userType, registeredAt])
+  @@index([registeredAt])
 }
 
 model BlogPost {
@@ -328,12 +383,56 @@ model CustomerProfile {
   vehicleAuthorityConfirmedAt     DateTime?
   createdAt                       DateTime  @default(now())
   updatedAt                       DateTime  @updatedAt
+  firstRidePromotionReservedId    String?   @unique
+  firstRidePromotionRedeemedAt    DateTime?
 
   user             User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   vehicles         Vehicle[]
   bookings         Booking[]
   overageCharges   CustomerOverageCharge[]
   identityDocument CustomerIdentityDocument?
+  firstRidePromotionRedemptions FirstRidePromotionRedemption[]
+}
+
+model FirstRidePromotionConfig {
+  id                         String                @id
+  enabled                    Boolean               @default(false)
+  discountType               PromotionDiscountType @default(FIXED_AMOUNT)
+  discountValue              Float                 @default(0)
+  maxDiscountAmount          Float?
+  minimumBookingAmount       Float                 @default(0)
+  startsAt                   DateTime?
+  endsAt                     DateTime?
+  usageLimit                 Int?
+  usageCount                 Int                   @default(0)
+  eligibleMembershipTiers    MembershipTier[]
+  combineWithMembershipRates Boolean               @default(true)
+  createdAt                  DateTime              @default(now())
+  updatedAt                  DateTime              @updatedAt
+
+  redemptions FirstRidePromotionRedemption[]
+}
+
+model FirstRidePromotionRedemption {
+  id               String                           @id @default(uuid())
+  configId         String
+  customerId       String
+  bookingId        String                           @unique
+  status           FirstRidePromotionRedemptionStatus @default(RESERVED)
+  originalFare     Float
+  discountAmount   Float
+  reservedAt       DateTime                         @default(now())
+  redeemedAt       DateTime?
+  releasedAt       DateTime?
+  createdAt        DateTime                         @default(now())
+  updatedAt        DateTime                         @updatedAt
+
+  config   FirstRidePromotionConfig @relation(fields: [configId], references: [id], onDelete: Restrict)
+  customer CustomerProfile          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  booking  Booking                  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, status])
+  @@index([configId, status])
 }
 
 model Driver {
@@ -350,6 +449,7 @@ model Driver {
   currentLatitude      Float?
   currentLongitude     Float?
   locationUpdatedAt    DateTime?
+  lastHeartbeatAt      DateTime?
   currentZoneId        String?
   earningsAmount       Float     @default(0)
   createdAt            DateTime  @default(now())
@@ -474,6 +574,8 @@ model Booking {
   vehicleDetails          String?
   fareEstimate            Float
   bookedHourlyRate        Float?
+  promotionOriginalFare   Float?
+  promotionDiscountAmount Float                 @default(0)
   zoneCode                String
   activationWindowStartAt DateTime
   activationWindowEndAt   DateTime
@@ -495,6 +597,7 @@ model Booking {
   locationUpdates Location[]
   messages        TripMessage[]
   tripExtensions  TripExtension[]
+  firstRidePromotionRedemption FirstRidePromotionRedemption?
   sourceOverageCharge CustomerOverageCharge?   @relation("SourceBookingOverage")
   appliedOverageCharges CustomerOverageCharge[] @relation("AppliedBookingOverage")
 
@@ -511,6 +614,7 @@ model BookingDispatch {
   distanceKm  Float?
   status      BookingDispatchStatus @default(PENDING)
   notifiedAt  DateTime              @default(now())
+  expiresAt   DateTime?
   respondedAt DateTime?
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
@@ -521,6 +625,7 @@ model BookingDispatch {
   @@unique([bookingId, driverId])
   @@index([driverId, status])
   @@index([bookingId, status])
+  @@index([status, expiresAt])
 }
 
 model Trip {
@@ -657,6 +762,7 @@ model Notification {
   channel   NotificationChannel
   status    NotificationStatus  @default(PENDING)
   meta      Json?
+  dedupeKey String?             @unique
   createdAt DateTime            @default(now())
   readAt    DateTime?
 

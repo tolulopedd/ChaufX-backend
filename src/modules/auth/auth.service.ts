@@ -1,7 +1,8 @@
-import { AccountStatus, UserRole } from "@prisma/client";
+import { AccountStatus, ReferralUserType, UserRole } from "@prisma/client";
 import { AppError } from "../../common/AppError.js";
 import { comparePassword, hashPassword, refreshExpiryDate, signAccessToken, signRefreshToken } from "../../lib/auth.js";
 import { prisma } from "../../lib/prisma.js";
+import { attributeUserToPartner } from "../referrals/referral.service.js";
 
 export async function buildSession(user: {
   id: string;
@@ -17,7 +18,7 @@ export async function buildSession(user: {
     data: {
       userId: user.id,
       tokenHash: await hashPassword(refreshToken),
-      expiresAt: refreshExpiryDate()
+      expiresAt: refreshExpiryDate(user.role)
     }
   });
 
@@ -39,6 +40,7 @@ export async function registerCustomer(input: {
   email: string;
   phone?: string;
   password: string;
+  referralCode?: string;
 }) {
   const existingUser = await prisma.user.findUnique({
     where: { email: input.email }
@@ -64,6 +66,12 @@ export async function registerCustomer(input: {
     }
   });
 
+  await attributeUserToPartner({
+    userId: user.id,
+    userType: ReferralUserType.CUSTOMER,
+    referralCode: input.referralCode
+  });
+
   return buildSession(user);
 }
 
@@ -72,6 +80,7 @@ export async function createVerifiedCustomer(input: {
   email: string;
   phone?: string;
   passwordHash: string;
+  referralCode?: string;
 }) {
   const existingUser = await prisma.user.findUnique({
     where: {
@@ -108,10 +117,16 @@ export async function createVerifiedCustomer(input: {
       }
     });
 
+    await attributeUserToPartner({
+      userId: updatedUser.id,
+      userType: ReferralUserType.CUSTOMER,
+      referralCode: input.referralCode
+    });
+
     return updatedUser;
   }
 
-  return prisma.user.create({
+  const user = await prisma.user.create({
     data: {
       fullName: input.fullName,
       email: input.email,
@@ -127,6 +142,14 @@ export async function createVerifiedCustomer(input: {
       }
     }
   });
+
+  await attributeUserToPartner({
+    userId: user.id,
+    userType: ReferralUserType.CUSTOMER,
+    referralCode: input.referralCode
+  });
+
+  return user;
 }
 
 export async function login(input: { email: string; password: string; expectedApp?: "customer" | "driver" }) {

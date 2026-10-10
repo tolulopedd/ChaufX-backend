@@ -6,6 +6,7 @@ import { prisma } from "./lib/prisma.js";
 import { dispatchOutstandingPaidBookings } from "./modules/bookings/booking.service.js";
 import { releaseExpiredAuthorizedBookings } from "./modules/payments/payments.routes.js";
 import { completeExpiredPaidTrips, sendTripExtensionReminders } from "./modules/trips/trip-lifecycle.service.js";
+import { retryPendingPushNotifications } from "./lib/notifications.js";
 
 const app = createApp();
 const server = createServer(app);
@@ -16,7 +17,8 @@ const io = new Server(server, {
   }
 });
 
-const paidBookingDispatchIntervalMs = 60_000;
+const paidBookingDispatchIntervalMs = env.BOOKING_DISPATCH_SWEEP_INTERVAL_SECONDS * 1000;
+const tripLifecycleIntervalMs = 60_000;
 let dispatchRetryInFlight = false;
 let tripLifecycleInFlight = false;
 
@@ -29,6 +31,7 @@ async function retryOutstandingPaidBookings() {
   try {
     await dispatchOutstandingPaidBookings();
     await releaseExpiredAuthorizedBookings();
+    await retryPendingPushNotifications();
   } catch (error) {
     // A retry failure must not take the API offline; the next interval will retry it.
     console.error("Unable to retry outstanding paid bookings", error);
@@ -55,9 +58,13 @@ async function processTripLifecycle() {
 
 const paidBookingDispatchTimer = setInterval(() => {
   void retryOutstandingPaidBookings();
-  void processTripLifecycle();
 }, paidBookingDispatchIntervalMs);
 paidBookingDispatchTimer.unref();
+
+const tripLifecycleTimer = setInterval(() => {
+  void processTripLifecycle();
+}, tripLifecycleIntervalMs);
+tripLifecycleTimer.unref();
 
 io.on("connection", (socket) => {
   socket.on("trip:subscribe", (bookingId: string) => {
@@ -83,12 +90,14 @@ boot().catch((error) => {
 
 process.on("SIGINT", async () => {
   clearInterval(paidBookingDispatchTimer);
+  clearInterval(tripLifecycleTimer);
   await prisma.$disconnect();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
   clearInterval(paidBookingDispatchTimer);
+  clearInterval(tripLifecycleTimer);
   await prisma.$disconnect();
   process.exit(0);
 });

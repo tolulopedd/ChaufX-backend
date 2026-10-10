@@ -4,6 +4,7 @@ import { asyncHandler } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { paramValue } from "../../lib/http.js";
+import { AppError } from "../../common/AppError.js";
 
 export const notificationsRoutes = Router();
 
@@ -36,6 +37,10 @@ notificationsRoutes.post(
   "/notifications/devices",
   asyncHandler(async (request, response) => {
     const input = registerPushDeviceSchema.parse(request.body);
+
+    if (input.appVariant !== request.auth!.role && ["customer", "driver"].includes(request.auth!.role)) {
+      throw new AppError("Push device app does not match this account", 403, "PUSH_APP_MISMATCH");
+    }
 
     const device = await prisma.pushDevice.upsert({
       where: {
