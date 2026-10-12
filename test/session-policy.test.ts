@@ -6,6 +6,10 @@ describe("mobile session policy", () => {
     expect(refreshTokenTtlDays("driver")).toBeGreaterThan(refreshTokenTtlDays("admin"));
   });
 
+  it("uses a rolling, bounded driver refresh lifetime by default", () => {
+    expect(refreshTokenTtlDays("driver")).toBe(90);
+  });
+
   it("supports persistent customer session restoration", () => {
     expect(refreshTokenTtlDays("customer")).toBeGreaterThanOrEqual(30);
   });

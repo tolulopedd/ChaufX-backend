@@ -30,7 +30,9 @@ const schema = z.object({
   JWT_REFRESH_SECRET: z.string().min(16).default("chaufx-refresh-secret"),
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().default(14),
-  DRIVER_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(3650),
+  // Each successful refresh issues a replacement token, so an active driver
+  // stays signed in while an unused or lost device naturally expires.
+  DRIVER_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(90),
   CUSTOMER_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(90),
   BOOKING_REQUEST_TIMEOUT_SECONDS: z.coerce.number().int().min(15).max(300).default(45),
   BOOKING_DISPATCH_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(60).default(15),
