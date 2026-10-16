@@ -112,6 +112,9 @@ function buildDriverAvailabilitySummary(rawAvailabilitySchedule?: string | null)
     .join("\n");
 }
 
+const DRIVER_APP_STORE_URL = "https://apps.apple.com/ca/app/chaufx-driver/id6782411963";
+const DRIVER_GOOGLE_PLAY_URL = "https://play.google.com/store/apps/details?id=ca.chaufx.driver&pcampaignid=web_share";
+
 function buildDriverApplicationStatusEmail(params: {
   decision: "approved" | "rejected" | "additional_info";
   fullName: string;
@@ -137,11 +140,20 @@ function buildDriverApplicationStatusEmail(params: {
               Set your password
             </a>
           </p>
-          <p style="margin: 0;">This link expires in 24 hours.</p>
+          <p style="margin: 0 0 16px;">After setting your password, download the <strong>ChaufX Driver</strong> app and sign in with your approved email address and new password.</p>
+          <p style="margin: 0 0 24px;">
+            <a href="${DRIVER_APP_STORE_URL}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 10px 10px 0;padding:12px 18px;border-radius:999px;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:600;">
+              Download on the App Store
+            </a>
+            <a href="${DRIVER_GOOGLE_PLAY_URL}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 10px 10px 0;padding:12px 18px;border-radius:999px;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:600;">
+              Get it on Google Play
+            </a>
+          </p>
+          <p style="margin: 0;">Your password setup link expires in 24 hours.</p>
           <p style="margin: 24px 0 0;">Regards,<br />ChaufX Team</p>
         </div>
       `,
-      text: `Dear ${firstName}, your ChaufX driver application has been approved. ${params.note} Set your password: ${params.setPasswordUrl} This link expires in 24 hours.\n\nRegards,\nChaufX Team`
+      text: `Dear ${firstName},\n\nYour ChaufX driver application has been approved. ${params.note}\n\nSet your password: ${params.setPasswordUrl}\n\nAfter setting your password, download the ChaufX Driver app and sign in with your approved email address and new password.\n\nApp Store: ${DRIVER_APP_STORE_URL}\nGoogle Play: ${DRIVER_GOOGLE_PLAY_URL}\n\nYour password setup link expires in 24 hours.\n\nRegards,\nChaufX Team`
     };
   }
 

@@ -77,7 +77,9 @@ const referralUserSelect = {
 
 export const referralAdminRoutes = Router();
 
-referralAdminRoutes.use(requireAuth, requireRole(["admin"]));
+// Marketing users manage partner links and performance, while all referral
+// attribution remains protected by the same authenticated Admin API.
+referralAdminRoutes.use(requireAuth, requireRole(["admin", "marketing"]));
 
 referralAdminRoutes.get(
   "/admin/referral-partners",

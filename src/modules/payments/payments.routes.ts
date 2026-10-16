@@ -852,7 +852,7 @@ paymentsRoutes.post(
       currency: "CAD",
       customerEmail: booking.customer.user.email,
       description:
-        `${booking.pickupLocation} to ${booking.destinationLocation}.` +
+        `${booking.pickupLocation} to ${booking.destinationLocation}. Card authorization only; charged after driver acceptance.` +
         (booking.promotionDiscountAmount > 0
           ? ` First Ride Discount Applied: -$${Number(booking.promotionDiscountAmount).toFixed(2)} CAD.`
           : ""),
