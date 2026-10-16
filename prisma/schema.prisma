@@ -190,6 +190,11 @@ enum ContactMessageStatus {
   RESOLVED
 }
 
+enum ContactMessageReplyAuthor {
+  CONTACT
+  ADMIN
+}
+
 enum EmailVerificationPurpose {
   CUSTOMER_SIGNUP
   DRIVER_ONBOARDING
@@ -239,6 +244,7 @@ model User {
   blogPostsAuthored    BlogPost[]
   tripMessagesSent     TripMessage[]
   referralAttribution ReferralAttribution?
+  contactMessageReplies ContactMessageReply[] @relation("ContactMessageReplyAuthor")
 }
 
 model ReferralPartner {
@@ -900,8 +906,26 @@ model ContactMessage {
   status           ContactMessageStatus @default(NEW)
   resolvedAt       DateTime?
   resolvedByUserId String?
+  feedbackTokenHash String?             @unique
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 
+  replies          ContactMessageReply[]
+
   @@index([status, createdAt])
+}
+
+model ContactMessageReply {
+  id               String                     @id @default(uuid())
+  contactMessageId String
+  author           ContactMessageReplyAuthor
+  message          String
+  adminUserId      String?
+  emailSentAt      DateTime?
+  createdAt        DateTime                   @default(now())
+
+  contactMessage ContactMessage @relation(fields: [contactMessageId], references: [id], onDelete: Cascade)
+  adminUser      User?          @relation("ContactMessageReplyAuthor", fields: [adminUserId], references: [id], onDelete: SetNull)
+
+  @@index([contactMessageId, createdAt])
 }

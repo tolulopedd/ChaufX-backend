@@ -55,9 +55,10 @@ export function createApp() {
   app.get("/api/memberships/checkout/cancel", membershipCheckoutCancelHandler);
   app.use("/api", healthRoutes);
   app.use("/api", authRoutes);
-  // Public articles must be registered before routers that apply auth globally.
+  // Public routes must be registered before routers that apply auth globally.
   app.use("/api", blogRoutes);
   app.use("/api", driverOnboardingRoutes);
+  app.use("/api", contactMessageRoutes);
   app.use("/api", usersRoutes);
   app.use("/api", driversRoutes);
   app.use("/api", bookingsRoutes);
@@ -66,7 +67,6 @@ export function createApp() {
   app.use("/api", paymentsRoutes);
   app.use("/api", membershipsRoutes);
   app.use("/api", notificationsRoutes);
-  app.use("/api", contactMessageRoutes);
   app.use("/api", tripMessagesRoutes);
   app.use("/api", referralAdminRoutes);
   // Admin routes apply an admin-only router middleware, so they must be mounted last.
