@@ -98,20 +98,21 @@ contactMessageRoutes.post(
 
     const token = createFeedbackToken();
     const tokenHash = hashFeedbackToken(token);
-    const reply = await prisma.$transaction(async (tx) => {
+    // A batch transaction does not hold a connection open while a callback is
+    // scheduled, which is more reliable for the production hosted database.
+    const [, reply] = await prisma.$transaction([
       // Rotate the bearer link with each outgoing email so an older forwarded
       // link cannot continue to expose the conversation.
-      await tx.contactMessage.update({ where: { id: contactMessage.id }, data: { feedbackTokenHash: tokenHash } });
-
-      return tx.contactMessageReply.create({
+      prisma.contactMessage.update({ where: { id: contactMessage.id }, data: { feedbackTokenHash: tokenHash } }),
+      prisma.contactMessageReply.create({
         data: {
           contactMessageId: contactMessage.id,
           author: ContactMessageReplyAuthor.ADMIN,
           message: input.message,
           adminUserId: request.auth!.userId
         }
-      });
-    });
+      })
+    ]);
 
     const replyUrl = feedbackLink(token);
 
@@ -169,15 +170,15 @@ contactMessageRoutes.post(
     const contactMessage = await prisma.contactMessage.findUnique({ where: { feedbackTokenHash: hashFeedbackToken(token) } });
     if (!contactMessage) throw new AppError("This feedback link is invalid or no longer available.", 404, "FEEDBACK_LINK_INVALID");
 
-    const reply = await prisma.$transaction(async (tx) => {
-      await tx.contactMessage.update({
+    const [, reply] = await prisma.$transaction([
+      prisma.contactMessage.update({
         where: { id: contactMessage.id },
         data: { status: ContactMessageStatus.NEW, resolvedAt: null, resolvedByUserId: null }
-      });
-      return tx.contactMessageReply.create({
+      }),
+      prisma.contactMessageReply.create({
         data: { contactMessageId: contactMessage.id, author: ContactMessageReplyAuthor.CONTACT, message: input.message }
-      });
-    });
+      })
+    ]);
 
     response.status(201).json(reply);
   })
