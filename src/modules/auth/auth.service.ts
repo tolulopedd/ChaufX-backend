@@ -1,6 +1,6 @@
 import { AccountStatus, ReferralUserType, UserRole } from "@prisma/client";
 import { AppError } from "../../common/AppError.js";
-import { comparePassword, hashPassword, refreshExpiryDate, signAccessToken, signRefreshToken } from "../../lib/auth.js";
+import { comparePassword, createRefreshTokenId, hashPassword, refreshExpiryDate, signAccessToken, signRefreshToken } from "../../lib/auth.js";
 import { prisma } from "../../lib/prisma.js";
 import { attributeUserToPartner } from "../referrals/referral.service.js";
 
@@ -12,11 +12,13 @@ export async function buildSession(user: {
   phone: string | null;
 }) {
   const accessToken = signAccessToken({ userId: user.id, role: user.role.toLowerCase() });
-  const refreshToken = signRefreshToken({ userId: user.id, role: user.role.toLowerCase() });
+  const tokenId = createRefreshTokenId();
+  const refreshToken = signRefreshToken({ userId: user.id, role: user.role.toLowerCase(), tokenId });
 
   await prisma.refreshToken.create({
     data: {
       userId: user.id,
+      tokenId,
       tokenHash: await hashPassword(refreshToken),
       expiresAt: refreshExpiryDate(user.role)
     }

@@ -298,23 +298,40 @@ authRoutes.post(
     const { refreshToken } = refreshSchema.parse(request.body);
     const payload = verifyRefreshToken(refreshToken);
 
-    const storedTokens = await prisma.refreshToken.findMany({
-      where: {
-        userId: payload.userId,
-        revokedAt: null
-      },
-      orderBy: { createdAt: "desc" }
-    });
+    // New refresh tokens carry an indexed ID (JWT jti), so only one bcrypt
+    // comparison is needed. Tokens issued before this migration have no jti;
+    // retain the legacy lookup until they rotate or expire.
+    const indexedToken = payload.tokenId
+      ? await prisma.refreshToken.findFirst({
+          where: {
+            userId: payload.userId,
+            tokenId: payload.tokenId,
+            revokedAt: null
+          }
+        })
+      : null;
 
-    const matchedToken = await Promise.any(
-      storedTokens.map(async (tokenRecord: RefreshToken) => {
-        const matches = await comparePassword(refreshToken, tokenRecord.tokenHash);
-        if (matches) {
-          return tokenRecord;
-        }
-        throw new Error("No match");
-      })
-    ).catch(() => null);
+    const matchedToken = indexedToken
+      ? (await comparePassword(refreshToken, indexedToken.tokenHash) ? indexedToken : null)
+      : await (async () => {
+          if (payload.tokenId) return null;
+
+          const storedTokens = await prisma.refreshToken.findMany({
+            where: {
+              userId: payload.userId,
+              revokedAt: null
+            },
+            orderBy: { createdAt: "desc" }
+          });
+
+          return Promise.any(
+            storedTokens.map(async (tokenRecord: RefreshToken) => {
+              const matches = await comparePassword(refreshToken, tokenRecord.tokenHash);
+              if (matches) return tokenRecord;
+              throw new Error("No match");
+            })
+          ).catch(() => null);
+        })();
 
     if (!matchedToken) {
       throw new AppError("Refresh token is invalid", 401, "INVALID_REFRESH");

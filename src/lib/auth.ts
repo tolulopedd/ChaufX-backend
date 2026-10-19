@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { randomUUID } from "node:crypto";
 import jwt, { type SignOptions } from "jsonwebtoken";
 import { env } from "../config/env.js";
 
@@ -17,10 +18,16 @@ export function signAccessToken(payload: { userId: string; role: string }) {
   });
 }
 
-export function signRefreshToken(payload: { userId: string; role: string }) {
+export function createRefreshTokenId() {
+  return randomUUID();
+}
+
+export function signRefreshToken(payload: { userId: string; role: string; tokenId: string }) {
   const expiresIn = `${refreshTokenTtlDays(payload.role)}d` as SignOptions["expiresIn"];
-  return jwt.sign(payload, env.JWT_REFRESH_SECRET, {
-    expiresIn
+  const { tokenId, ...claims } = payload;
+  return jwt.sign(claims, env.JWT_REFRESH_SECRET, {
+    expiresIn,
+    jwtid: tokenId
   });
 }
 
@@ -29,7 +36,12 @@ export function verifyAccessToken(token: string) {
 }
 
 export function verifyRefreshToken(token: string) {
-  return jwt.verify(token, env.JWT_REFRESH_SECRET) as { userId: string; role: string };
+  const payload = jwt.verify(token, env.JWT_REFRESH_SECRET) as jwt.JwtPayload & { userId: string; role: string };
+  return {
+    userId: payload.userId,
+    role: payload.role,
+    tokenId: typeof payload.jti === "string" ? payload.jti : undefined
+  };
 }
 
 export function refreshTokenTtlDays(role: string) {

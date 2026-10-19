@@ -881,6 +881,7 @@ model DriverSettlement {
 model RefreshToken {
   id        String    @id @default(uuid())
   userId    String
+  tokenId   String?   @unique
   tokenHash String
   expiresAt DateTime
   revokedAt DateTime?
@@ -889,6 +890,7 @@ model RefreshToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
+  @@index([userId, tokenId, revokedAt])
 }
 
 model AuditLog {
