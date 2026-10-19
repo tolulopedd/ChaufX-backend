@@ -1,5 +1,6 @@
 import {
   AccountStatus,
+  BookingPaymentMethod,
   BookingStatus,
   DriverApplicationReviewAuthor,
   DriverApplicationReviewEvent,
@@ -35,6 +36,14 @@ import {
 import { EmailVerificationPurpose } from "@prisma/client";
 import { calculateBookingSettlement } from "../settlements/settlement-calculation.js";
 import { firstRidePromotionConfigId } from "../promotions/first-ride-promotion.service.js";
+import {
+  createBookingRecord,
+  dispatchBookingToEligibleDrivers,
+  findMatchingAwaitingPaymentBooking,
+  resolveBookingPricing
+} from "../bookings/booking.service.js";
+import { notifyUser } from "../../lib/notifications.js";
+import { NotificationChannel, NotificationType } from "@prisma/client";
 
 export const adminRoutes = Router();
 
@@ -74,6 +83,55 @@ function disableResponseCache(response: Response) {
 
 function firstNameFromFullName(fullName: string) {
   return fullName.trim().split(/\s+/)[0] ?? fullName.trim();
+}
+
+const interacRecipientEmail = "payment@chaufx.ca";
+
+function assistedBookingReference(bookingId: string) {
+  return `CHX-TRIP-${bookingId.replace(/-/g, "").slice(-10).toUpperCase()}`;
+}
+
+export function isValidAssistedBookingStartTime(requestType: "NOW" | "LATER", scheduledStartAt: Date, now = new Date()) {
+  return requestType === "NOW"
+    ? scheduledStartAt.getTime() >= now.getTime()
+    : scheduledStartAt.getTime() >= now.getTime() + 60 * 60_000;
+}
+
+export function canConfirmAdminAssistedInteracPayment(input: {
+  method: BookingPaymentMethod;
+  paymentStatus: PaymentStatus;
+  bookingStatus: BookingStatus;
+  adminAssistedAt: Date | null;
+}) {
+  return input.method === BookingPaymentMethod.INTERAC &&
+    input.paymentStatus === PaymentStatus.PENDING &&
+    input.bookingStatus === BookingStatus.AWAITING_PAYMENT &&
+    Boolean(input.adminAssistedAt);
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] ?? character);
+}
+
+function assistedBookingEmail(input: {
+  fullName: string;
+  reference: string;
+  amount: number;
+  pickupLocation: string;
+  destinationLocation: string;
+  scheduledStartAt: Date;
+  hours: number;
+}) {
+  const firstName = escapeHtml(firstNameFromFullName(input.fullName));
+  const route = `${escapeHtml(input.pickupLocation)}${input.destinationLocation === "Destination to be confirmed" ? "" : ` to ${escapeHtml(input.destinationLocation)}`}`;
+  const date = input.scheduledStartAt.toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
+  const amount = `$${input.amount.toFixed(2)} CAD`;
+  const text = `Hello ${firstNameFromFullName(input.fullName)},\n\nYour ChaufX booking is awaiting payment.\n\nBooking reference: ${input.reference}\nTrip: ${input.pickupLocation}${input.destinationLocation === "Destination to be confirmed" ? "" : ` to ${input.destinationLocation}`}\nDate and time: ${date}\nDuration: ${input.hours} hours\nAmount payable: ${amount}\n\nSend an Interac e-Transfer to ${interacRecipientEmail}. Include ${input.reference} in the transfer message. Your booking is activated and routed to drivers only after ChaufX confirms receipt.\n\nChaufX Team`;
+  return {
+    subject: `ChaufX booking payment instructions — ${input.reference}`,
+    text,
+    html: `<div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.6;max-width:620px"><p>Hello ${firstName},</p><p>Your ChaufX booking is awaiting payment.</p><p><strong>Booking reference:</strong> ${input.reference}<br/><strong>Trip:</strong> ${route}<br/><strong>Date and time:</strong> ${date}<br/><strong>Duration:</strong> ${input.hours} hours<br/><strong>Amount payable:</strong> ${amount}</p><p>Send an Interac e-Transfer to <strong>${interacRecipientEmail}</strong>. Include <strong>${input.reference}</strong> in the transfer message.</p><p>Your booking is activated and routed to drivers only after ChaufX confirms receipt.</p><p>ChaufX Team</p></div>`
+  };
 }
 
 function buildDriverAvailabilitySummary(rawAvailabilitySchedule?: string | null) {
@@ -1352,6 +1410,315 @@ adminRoutes.post(
     });
 
     response.json(user);
+  })
+);
+
+const assistedBookingCustomerSchema = z.object({
+  fullName: z.string().trim().min(2).max(120),
+  email: z.string().trim().email(),
+  phone: z.string().trim().min(7).max(40),
+  temporaryPassword: z.string().min(8).max(120)
+});
+
+export const assistedBookingSchema = z.object({
+  customerUserId: z.string().uuid(),
+  vehicleId: z.string().uuid().optional(),
+  requestType: z.enum(["NOW", "LATER"]),
+  pickupLocation: z.string().trim().min(3).max(300),
+  pickupLat: z.coerce.number().min(-90).max(90),
+  pickupLng: z.coerce.number().min(-180).max(180),
+  destinationLocation: z.string().trim().min(3).max(300).optional(),
+  destinationLat: z.coerce.number().min(-90).max(90).optional(),
+  destinationLng: z.coerce.number().min(-180).max(180).optional(),
+  scheduledStartAt: z.coerce.date(),
+  expectedDurationMinutes: z.coerce.number().int().min(120).max(720),
+  vehicleDetails: z.string().trim().min(2).max(300),
+  specialNotes: z.string().trim().max(1000).optional(),
+  zoneCode: z.string().trim().min(2).max(120),
+  sendPaymentInstructions: z.boolean().default(true)
+});
+
+adminRoutes.get(
+  "/admin/assisted-bookings/customers",
+  asyncHandler(async (request, response) => {
+    const query = z.object({ query: z.string().trim().max(120).optional() }).parse(request.query);
+    const where = query.query
+      ? {
+          role: UserRole.CUSTOMER,
+          OR: [
+            { fullName: { contains: query.query, mode: "insensitive" as const } },
+            { email: { contains: query.query, mode: "insensitive" as const } },
+            { phone: { contains: query.query, mode: "insensitive" as const } }
+          ]
+        }
+      : { role: UserRole.CUSTOMER };
+    const customers = await prisma.user.findMany({
+      where,
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        membershipTier: true,
+        membershipStatus: true,
+        customerProfile: { select: { id: true, vehicles: { orderBy: [{ isPrimary: "desc" }, { updatedAt: "desc" }] } } }
+      },
+      orderBy: { fullName: "asc" },
+      take: 50
+    });
+    response.json(customers);
+  })
+);
+
+adminRoutes.post(
+  "/admin/assisted-bookings/customers",
+  asyncHandler(async (request, response) => {
+    const input = assistedBookingCustomerSchema.parse(request.body);
+    const existing = await prisma.user.findUnique({ where: { email: input.email }, select: { id: true } });
+    if (existing) throw new AppError("A customer with this email already exists.", 409, "CUSTOMER_EMAIL_TAKEN");
+
+    const customer = await prisma.user.create({
+      data: {
+        fullName: input.fullName,
+        email: input.email,
+        phone: input.phone,
+        passwordHash: await hashPassword(input.temporaryPassword),
+        role: UserRole.CUSTOMER,
+        status: AccountStatus.ACTIVE,
+        emailVerifiedAt: new Date(),
+        customerProfile: { create: { savedAddresses: [] } }
+      },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        membershipTier: true,
+        membershipStatus: true,
+        customerProfile: { select: { id: true, vehicles: true } }
+      }
+    });
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "ADMIN_ASSISTED_CUSTOMER_CREATED",
+      entityType: "User",
+      entityId: customer.id,
+      details: { email: customer.email }
+    });
+    response.status(201).json(customer);
+  })
+);
+
+adminRoutes.post(
+  "/admin/assisted-bookings/estimate",
+  asyncHandler(async (request, response) => {
+    const input = assistedBookingSchema.parse({ ...request.body, sendPaymentInstructions: false });
+    const customer = await prisma.user.findFirst({
+      where: { id: input.customerUserId, role: UserRole.CUSTOMER },
+      select: { customerProfile: { select: { id: true } } }
+    });
+    if (!customer?.customerProfile) throw new AppError("Customer not found.", 404, "CUSTOMER_NOT_FOUND");
+    const pricing = await resolveBookingPricing({
+      zoneCode: input.zoneCode,
+      expectedDurationMinutes: input.expectedDurationMinutes,
+      customerUserId: input.customerUserId,
+      pickupLocation: input.pickupLocation,
+      destinationLocation: input.destinationLocation,
+      pickupLat: input.pickupLat,
+      pickupLng: input.pickupLng
+    });
+    if (!pricing.pricingAvailable) {
+      throw new AppError(pricing.pricingUnavailableMessage ?? "Pricing is unavailable for this pickup location.", 409, "PRICING_UNAVAILABLE");
+    }
+    response.json(pricing);
+  })
+);
+
+adminRoutes.post(
+  "/admin/assisted-bookings",
+  asyncHandler(async (request, response) => {
+    const input = assistedBookingSchema.parse(request.body);
+    if (!isValidAssistedBookingStartTime(input.requestType, input.scheduledStartAt)) {
+      throw new AppError(
+        input.requestType === "LATER" ? "Scheduled trips must be at least one hour ahead." : "Book Now time must not be in the past.",
+        422,
+        "INVALID_BOOKING_START_TIME"
+      );
+    }
+    const customer = await prisma.user.findFirst({
+      where: { id: input.customerUserId, role: UserRole.CUSTOMER },
+      include: { customerProfile: { include: { vehicles: true } } }
+    });
+    if (!customer?.customerProfile) throw new AppError("Customer not found.", 404, "CUSTOMER_NOT_FOUND");
+    if (input.vehicleId && !customer.customerProfile.vehicles.some((vehicle) => vehicle.id === input.vehicleId)) {
+      throw new AppError("The selected vehicle does not belong to this customer.", 422, "INVALID_CUSTOMER_VEHICLE");
+    }
+
+    const destinationLocation = input.destinationLocation ?? "Destination to be confirmed";
+    const destinationLat = input.destinationLat ?? input.pickupLat;
+    const destinationLng = input.destinationLng ?? input.pickupLng;
+    const existing = await findMatchingAwaitingPaymentBooking({
+      customerId: customer.customerProfile.id,
+      vehicleId: input.vehicleId,
+      requestType: input.requestType,
+      pickupLocation: input.pickupLocation,
+      pickupLat: input.pickupLat,
+      pickupLng: input.pickupLng,
+      destinationLocation,
+      destinationLat,
+      destinationLng,
+      scheduledStartAt: input.scheduledStartAt,
+      expectedDurationMinutes: input.expectedDurationMinutes,
+      specialNotes: input.specialNotes,
+      vehicleDetails: input.vehicleDetails,
+      zoneCode: input.zoneCode
+    });
+    const booking = existing ?? await createBookingRecord({
+      customerId: customer.customerProfile.id,
+      customerUserId: customer.id,
+      vehicleId: input.vehicleId,
+      requestType: input.requestType,
+      pickupLocation: input.pickupLocation,
+      pickupLat: input.pickupLat,
+      pickupLng: input.pickupLng,
+      destinationLocation,
+      destinationLat,
+      destinationLng,
+      scheduledStartAt: input.scheduledStartAt,
+      expectedDurationMinutes: input.expectedDurationMinutes,
+      specialNotes: input.specialNotes,
+      vehicleDetails: input.vehicleDetails,
+      zoneCode: input.zoneCode
+    });
+    const reference = assistedBookingReference(booking.id);
+    const payment = await prisma.payment.upsert({
+      where: { bookingId: booking.id },
+      create: {
+        bookingId: booking.id,
+        amount: booking.fareEstimate,
+        currency: "CAD",
+        status: PaymentStatus.PENDING,
+        method: BookingPaymentMethod.INTERAC,
+        providerReference: reference,
+        notes: "Admin-assisted booking awaiting Interac e-Transfer confirmation."
+      },
+      update: {
+        amount: booking.fareEstimate,
+        currency: "CAD",
+        status: PaymentStatus.PENDING,
+        method: BookingPaymentMethod.INTERAC,
+        providerReference: reference,
+        stripeCheckoutSessionId: null,
+        stripePaymentIntentId: null,
+        notes: "Admin-assisted booking awaiting Interac e-Transfer confirmation."
+      }
+    });
+    const updatedBooking = await prisma.booking.update({
+      where: { id: booking.id },
+      data: { status: BookingStatus.AWAITING_PAYMENT, adminAssistedAt: booking.adminAssistedAt ?? new Date(), adminAssistedByUserId: booking.adminAssistedByUserId ?? request.auth!.userId }
+    });
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: existing ? "ADMIN_ASSISTED_BOOKING_REUSED" : "ADMIN_ASSISTED_BOOKING_CREATED",
+      entityType: "Booking",
+      entityId: booking.id,
+      details: { paymentMethod: "INTERAC", reference, amount: payment.amount, requestType: booking.requestType }
+    });
+    await notifyUser({
+      userId: customer.id,
+      type: NotificationType.BOOKING_SUBMITTED,
+      title: "Booking awaiting payment",
+      body: `Your booking ${reference} is awaiting Interac e-Transfer confirmation.`,
+      channel: NotificationChannel.IN_APP,
+      dedupeKey: `assisted-booking-awaiting-payment:${booking.id}`
+    });
+    let emailSent = false;
+    if (input.sendPaymentInstructions) {
+      try {
+        await sendTransactionalEmail({
+          to: customer.email,
+          ...assistedBookingEmail({
+            fullName: customer.fullName,
+            reference,
+            amount: payment.amount,
+            pickupLocation: booking.pickupLocation,
+            destinationLocation: booking.destinationLocation,
+            scheduledStartAt: booking.scheduledStartAt,
+            hours: booking.expectedDurationMinutes / 60
+          })
+        });
+        emailSent = true;
+      } catch (error) {
+        await createAuditLog({ actorId: request.auth!.userId, action: "ADMIN_ASSISTED_PAYMENT_EMAIL_FAILED", entityType: "Booking", entityId: booking.id, details: { message: error instanceof Error ? error.message : "Unknown email error" } });
+      }
+    }
+    response.status(existing ? 200 : 201).json({ booking: updatedBooking, payment, reference, recipientEmail: interacRecipientEmail, emailSent });
+  })
+);
+
+adminRoutes.post(
+  "/admin/assisted-bookings/:bookingId/confirm-payment",
+  asyncHandler(async (request, response) => {
+    const bookingId = paramValue(request.params.bookingId);
+    const input = z.object({
+      amount: z.coerce.number().positive().optional(),
+      paymentReference: z.string().trim().min(3).max(160).optional(),
+      receivedAt: z.coerce.date().optional(),
+      notes: z.string().trim().max(1000).optional()
+    }).parse(request.body);
+    const payment = await prisma.payment.findUnique({
+      where: { bookingId },
+      include: { booking: { include: { customer: { include: { user: true } } } } }
+    });
+    if (!payment || payment.method !== BookingPaymentMethod.INTERAC || !payment.booking.adminAssistedAt) {
+      throw new AppError("This is not an admin-assisted Interac booking.", 404, "ADMIN_ASSISTED_PAYMENT_NOT_FOUND");
+    }
+    if (payment.status === PaymentStatus.RECORDED) {
+      response.json({ payment, alreadyConfirmed: true, dispatch: await dispatchBookingToEligibleDrivers(bookingId) });
+      return;
+    }
+    if (!canConfirmAdminAssistedInteracPayment({
+      method: payment.method,
+      paymentStatus: payment.status,
+      bookingStatus: payment.booking.status,
+      adminAssistedAt: payment.booking.adminAssistedAt
+    })) {
+      throw new AppError("This booking cannot be activated from its current payment state.", 409, "PAYMENT_CONFIRMATION_NOT_ALLOWED");
+    }
+    const amountReceived = input.amount ?? payment.amount;
+    const receivedAt = input.receivedAt ?? new Date();
+    const paymentReference = input.paymentReference ?? payment.providerReference ?? assistedBookingReference(bookingId);
+    if (Math.abs(payment.amount - amountReceived) > 0.009) {
+      await createAuditLog({ actorId: request.auth!.userId, action: "ADMIN_ASSISTED_PAYMENT_DISCREPANCY", entityType: "Payment", entityId: payment.id, details: { expectedAmount: payment.amount, receivedAmount: input.amount, paymentReference: input.paymentReference } });
+      throw new AppError(`Payment amount does not match the booking amount of $${payment.amount.toFixed(2)} CAD.`, 409, "PAYMENT_AMOUNT_MISMATCH");
+    }
+    const admin = await prisma.user.findUniqueOrThrow({ where: { id: request.auth!.userId }, select: { fullName: true } });
+    const changed = await prisma.payment.updateMany({
+      where: { id: payment.id, method: BookingPaymentMethod.INTERAC, status: PaymentStatus.PENDING },
+      data: {
+        status: PaymentStatus.RECORDED,
+        providerReference: paymentReference,
+        interacTransferConfirmedAt: receivedAt,
+        recordedAt: new Date(),
+        confirmedByUserId: request.auth!.userId,
+        confirmedByAdminName: admin.fullName,
+        notes: input.notes ?? "Interac e-Transfer confirmed by admin."
+      }
+    });
+    if (!changed.count) throw new AppError("Payment confirmation is already being processed.", 409, "PAYMENT_CONFIRMATION_IN_PROGRESS");
+    const confirmedPayment = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    await createAuditLog({ actorId: request.auth!.userId, action: "ADMIN_ASSISTED_PAYMENT_CONFIRMED", entityType: "Payment", entityId: payment.id, details: { bookingId, amount: amountReceived, paymentReference, receivedAt: receivedAt.toISOString() } });
+    const dispatch = await dispatchBookingToEligibleDrivers(bookingId);
+    await notifyUser({ userId: payment.booking.customer.userId, type: NotificationType.BOOKING_SUBMITTED, title: "Payment confirmed", body: "Your payment has been confirmed. We are finding your driver.", channel: NotificationChannel.IN_APP, dedupeKey: `assisted-booking-payment-confirmed:${bookingId}` });
+    await sendTransactionalEmail({
+      to: payment.booking.customer.user.email,
+      subject: "ChaufX payment confirmed — finding your driver",
+      text: `Hello ${firstNameFromFullName(payment.booking.customer.user.fullName)},\n\nYour Interac e-Transfer payment for booking ${payment.booking.pickupLocation} has been confirmed. We are now finding your driver.\n\nChaufX Team`,
+      html: `<div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.6"><p>Hello ${escapeHtml(firstNameFromFullName(payment.booking.customer.user.fullName))},</p><p>Your Interac e-Transfer payment has been confirmed. We are now finding your driver.</p><p>ChaufX Team</p></div>`
+    }).catch(async (error) => {
+      await createAuditLog({ actorId: request.auth!.userId, action: "ADMIN_ASSISTED_PAYMENT_CONFIRMATION_EMAIL_FAILED", entityType: "Payment", entityId: payment.id, details: { message: error instanceof Error ? error.message : "Unknown email error" } });
+    });
+    response.json({ payment: confirmedPayment, dispatch });
   })
 );
 

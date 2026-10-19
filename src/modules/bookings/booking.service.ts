@@ -511,7 +511,7 @@ export async function findEligibleDrivers(
 ) {
   const freshnessMinutes = requestType === "NOW"
     ? realtimeDispatchFreshnessMinutes
-    : Math.max(appConfig.driverLocationFreshnessMinutes, env.DRIVER_REALTIME_LOCATION_FRESHNESS_MINUTES);
+    : Math.max(appConfig.driverLocationFreshnessMinutes, env.DRIVER_SCHEDULED_LOCATION_FRESHNESS_MINUTES);
   const freshnessThreshold = new Date(Date.now() - freshnessMinutes * 60_000);
   const pushThreshold = new Date(Date.now() - env.DRIVER_PUSH_REACHABILITY_DAYS * 24 * 60 * 60_000);
   const drivers = await prisma.driver.findMany({

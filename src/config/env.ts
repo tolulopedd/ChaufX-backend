@@ -39,7 +39,12 @@ const schema = z.object({
   DRIVER_HEARTBEAT_INTERVAL_SECONDS: z.coerce.number().int().min(15).max(300).default(60),
   DRIVER_REACHABILITY_GRACE_SECONDS: z.coerce.number().int().min(30).max(3600).default(300),
   DRIVER_PUSH_REACHABILITY_DAYS: z.coerce.number().int().min(1).max(90).default(30),
-  DRIVER_REALTIME_LOCATION_FRESHNESS_MINUTES: z.coerce.number().int().min(5).max(1440).default(1440),
+  // Book Now requests need a recent position so we do not offer a nearby trip
+  // to a driver whose device has not checked in for a long time.
+  DRIVER_REALTIME_LOCATION_FRESHNESS_MINUTES: z.coerce.number().int().min(5).max(1440).default(15),
+  // Scheduled requests may be offered ahead of time, when a driver's last
+  // known position is still useful for service-area matching.
+  DRIVER_SCHEDULED_LOCATION_FRESHNESS_MINUTES: z.coerce.number().int().min(30).max(1440).default(1440),
   CLIENT_APP_URL: z.string().url().default("http://localhost:3000"),
   API_PUBLIC_URL: z.string().url().default("http://localhost:4000"),
   RESEND_API_KEY: z.string().optional(),

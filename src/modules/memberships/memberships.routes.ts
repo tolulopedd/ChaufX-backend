@@ -17,7 +17,7 @@ import {
 } from "./membership.service.js";
 
 export const membershipsRoutes = Router();
-const interacRecipientEmail = "payments@chaufx.ca";
+const interacRecipientEmail = "payment@chaufx.ca";
 const interacInstructionsTtlMs = 15 * 60 * 1000;
 
 type StripeCheckoutSession = {

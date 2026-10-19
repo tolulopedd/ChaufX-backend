@@ -89,6 +89,11 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum BookingPaymentMethod {
+  STRIPE
+  INTERAC
+}
+
 enum TripExtensionStatus {
   PENDING
   RECORDED
@@ -578,6 +583,8 @@ model Booking {
   expectedDurationMinutes Int
   specialNotes            String?
   vehicleDetails          String?
+  adminAssistedAt         DateTime?
+  adminAssistedByUserId   String?
   fareEstimate            Float
   bookedHourlyRate        Float?
   promotionOriginalFare   Float?
@@ -698,6 +705,7 @@ model Payment {
   amount            Float
   currency          String        @default("USD")
   status            PaymentStatus @default(PENDING)
+  method            BookingPaymentMethod @default(STRIPE)
   providerReference String?
   stripeCheckoutSessionId String? @unique
   stripePaymentIntentId   String? @unique
@@ -708,6 +716,8 @@ model Payment {
   authorizationReleasedAt DateTime?
   interacInstructionsExpiresAt DateTime?
   interacTransferConfirmedAt   DateTime?
+  confirmedByUserId            String?
+  confirmedByAdminName         String?
   recordedAt        DateTime?
   notes             String?
   createdAt         DateTime      @default(now())

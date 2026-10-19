@@ -1,4 +1,4 @@
-import { BookingStatus, PaymentStatus, TripExtensionStatus } from "@prisma/client";
+import { BookingPaymentMethod, BookingStatus, PaymentStatus, TripExtensionStatus } from "@prisma/client";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Router, type Request } from "express";
 import { z } from "zod";
@@ -18,7 +18,7 @@ import { releaseFirstRidePromotion } from "../promotions/first-ride-promotion.se
 
 export const paymentsRoutes = Router();
 
-const bookingInteracRecipientEmail = "payments@chaufx.ca";
+const bookingInteracRecipientEmail = "payment@chaufx.ca";
 const bookingInteracInstructionsTtlMs = 15 * 60 * 1000;
 
 type StripeCheckoutSession = {
@@ -698,7 +698,7 @@ paymentsRoutes.get(
       where: { bookingId }
     });
 
-    if (payment?.providerReference && payment.status === PaymentStatus.PENDING && env.STRIPE_SECRET_KEY) {
+    if (payment?.method !== BookingPaymentMethod.INTERAC && payment?.providerReference && payment.status === PaymentStatus.PENDING && env.STRIPE_SECRET_KEY) {
       payment = await syncPaymentRecord(bookingId, payment.providerReference);
     }
 
@@ -713,6 +713,10 @@ paymentsRoutes.post(
     const bookingId = paramValue(request.params.bookingId);
     const input = z.object({ hours: z.coerce.number().int().min(1).max(12) }).parse(request.body);
     const booking = await getCustomerOwnedBooking(bookingId, request.auth!.userId);
+
+    if (booking.payment?.method === BookingPaymentMethod.INTERAC && booking.adminAssistedAt) {
+      throw new AppError("This admin-assisted booking is payable by Interac e-Transfer and cannot be charged through Stripe.", 409, "INTERAC_PAYMENT_REQUIRED");
+    }
 
     if (booking.status !== BookingStatus.ACTIVE) {
       throw new AppError("Only an active trip can be extended.", 409, "TRIP_EXTENSION_NOT_AVAILABLE");
@@ -826,6 +830,10 @@ paymentsRoutes.post(
     const input = schema.parse(request.body ?? {});
     const booking = await getCustomerOwnedBooking(bookingId, request.auth!.userId);
 
+    if (booking.payment?.method === BookingPaymentMethod.INTERAC && booking.adminAssistedAt) {
+      throw new AppError("This admin-assisted booking is payable by Interac e-Transfer and cannot be charged through Stripe.", 409, "INTERAC_PAYMENT_REQUIRED");
+    }
+
     if (!["AWAITING_PAYMENT", "PENDING", "ACCEPTED", "ENROUTE", "ACTIVE", "COMPLETED"].includes(String(booking.status))) {
       throw new AppError(
         "Payment is not available for this booking right now.",
@@ -906,6 +914,20 @@ paymentsRoutes.post(
     const bookingId = paramValue(request.params.bookingId);
     const booking = await getCustomerOwnedBooking(bookingId, request.auth!.userId);
 
+    if (booking.payment?.method === BookingPaymentMethod.INTERAC && booking.adminAssistedAt) {
+      response.json({
+        payment: booking.payment,
+        instructions: {
+          recipientEmail: bookingInteracRecipientEmail,
+          reference: booking.payment.providerReference,
+          amount: booking.payment.amount,
+          currency: booking.payment.currency,
+          expiresAt: null
+        }
+      });
+      return;
+    }
+
     if (!['AWAITING_PAYMENT', 'PENDING'].includes(String(booking.status))) {
       throw new AppError("Payment is not available for this booking right now.", 409, "PAYMENT_NOT_READY");
     }
@@ -969,6 +991,10 @@ paymentsRoutes.post(
     const booking = await getCustomerOwnedBooking(bookingId, request.auth!.userId);
     const payment = booking.payment;
 
+    if (payment?.method === BookingPaymentMethod.INTERAC && booking.adminAssistedAt) {
+      throw new AppError("ChaufX will confirm this admin-assisted e-Transfer after receipt.", 409, "ADMIN_PAYMENT_CONFIRMATION_REQUIRED");
+    }
+
     if (!payment || payment.status !== PaymentStatus.PENDING || !payment.interacInstructionsExpiresAt) {
       throw new AppError("Create e-transfer instructions before confirming payment.", 409, "INTERAC_INSTRUCTIONS_REQUIRED");
     }
@@ -1010,6 +1036,10 @@ paymentsRoutes.post(
     const existing = await prisma.payment.findUnique({
       where: { bookingId }
     });
+
+    if (existing?.method === BookingPaymentMethod.INTERAC) {
+      throw new AppError("This booking uses Interac e-Transfer and has no Stripe payment session.", 409, "INTERAC_PAYMENT_REQUIRED");
+    }
 
     const sessionId = input.sessionId ?? existing?.providerReference;
     if (!sessionId) {
