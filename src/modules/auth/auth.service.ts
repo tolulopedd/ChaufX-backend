@@ -172,17 +172,9 @@ export async function login(input: { email: string; password: string; expectedAp
     throw new AppError("Invalid email or password", 401, "INVALID_CREDENTIALS");
   }
 
-  if (user.status !== AccountStatus.ACTIVE) {
-    throw new AppError("This account is not active yet", 403, "ACCOUNT_INACTIVE");
-  }
-
-  if (user.role === UserRole.DRIVER && !user.driver?.approvedAt) {
-    throw new AppError("Driver access remains locked until admin approval", 403, "DRIVER_NOT_APPROVED");
-  }
-
   if (input.expectedApp === "customer" && user.role !== UserRole.CUSTOMER) {
     throw new AppError(
-      "This account is registered for the driver app. Sign in through the ChaufX Driver app or use a customer account here.",
+      "This email is associated with a ChaufX Driver account. Download and sign in through the ChaufX Driver app.",
       403,
       "WRONG_APP_FOR_ROLE"
     );
@@ -190,10 +182,26 @@ export async function login(input: { email: string; password: string; expectedAp
 
   if (input.expectedApp === "driver" && user.role !== UserRole.DRIVER) {
     throw new AppError(
-      "This account is registered for the customer app. Sign in through the ChaufX Customer app or use an approved driver account here.",
+      "This email is associated with a ChaufX Customer account. Download and sign in through the ChaufX Customer app.",
       403,
       "WRONG_APP_FOR_ROLE"
     );
+  }
+
+  if (user.role === UserRole.DRIVER && user.status === AccountStatus.PENDING_APPROVAL && !user.driver?.approvedAt) {
+    throw new AppError(
+      "Your driver application is pending approval. You can sign in after ChaufX approves your application.",
+      403,
+      "DRIVER_NOT_APPROVED"
+    );
+  }
+
+  if (user.status !== AccountStatus.ACTIVE) {
+    throw new AppError("This account is not active. Please contact ChaufX support.", 403, "ACCOUNT_INACTIVE");
+  }
+
+  if (user.role === UserRole.DRIVER && !user.driver?.approvedAt) {
+    throw new AppError("Driver access requires ChaufX approval. Please contact support.", 403, "DRIVER_NOT_APPROVED");
   }
 
   return buildSession(user);

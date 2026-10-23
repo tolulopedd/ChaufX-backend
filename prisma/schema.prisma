@@ -456,6 +456,7 @@ model Driver {
   serviceAreas         String[]
   availabilitySchedule String?
   availabilityStatus   Boolean   @default(false)
+  payoutEmail          String?
   approvedAt           DateTime?
   currentLatitude      Float?
   currentLongitude     Float?

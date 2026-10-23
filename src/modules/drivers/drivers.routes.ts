@@ -7,6 +7,7 @@ import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { dispatchOutstandingPaidBookings, expireTimedOutDispatches } from "../bookings/booking.service.js";
 import { calculateBookingSettlement } from "../settlements/settlement-calculation.js";
 import { env } from "../../config/env.js";
+import { createAuditLog } from "../../lib/audit.js";
 
 export const driversRoutes = Router();
 
@@ -341,6 +342,34 @@ driversRoutes.get(
       },
       weeklySettlementRows
     });
+  })
+);
+
+driversRoutes.patch(
+  "/drivers/me/payout-email",
+  requireRole(["driver"]),
+  asyncHandler(async (request, response) => {
+    const schema = z.object({
+      payoutEmail: z.string().trim().email().max(254)
+    });
+    const input = schema.parse(request.body);
+    const payoutEmail = input.payoutEmail.toLowerCase();
+
+    const driver = await prisma.driver.update({
+      where: { userId: request.auth!.userId },
+      data: { payoutEmail },
+      select: { id: true, payoutEmail: true, updatedAt: true }
+    });
+
+    await createAuditLog({
+      actorId: request.auth!.userId,
+      action: "DRIVER_PAYOUT_EMAIL_UPDATED",
+      entityType: "Driver",
+      entityId: driver.id,
+      details: { payoutEmail }
+    });
+
+    response.json(driver);
   })
 );
 

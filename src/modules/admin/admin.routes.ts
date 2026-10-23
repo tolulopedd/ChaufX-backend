@@ -2061,6 +2061,7 @@ adminRoutes.get(
         driverId: string;
         driverName: string;
         driverEmail: string;
+        payoutEmail: string | null;
         tripCount: number;
         grossAmount: number;
         platformSharePercent: number;
@@ -2112,6 +2113,7 @@ adminRoutes.get(
         driverId: string;
         driverName: string;
         driverEmail: string;
+        payoutEmail: string | null;
         tripCount: number;
         grossAmount: number;
         platformSharePercent: number;
@@ -2140,6 +2142,7 @@ adminRoutes.get(
         driverId: booking.assignedDriver.id,
         driverName: booking.assignedDriver.user?.fullName ?? "Assigned driver",
         driverEmail: booking.assignedDriver.user?.email ?? "",
+        payoutEmail: booking.assignedDriver.payoutEmail ?? null,
         tripCount: 0,
         grossAmount: 0,
         platformSharePercent: settlementConfig.platformSharePercent,
@@ -2199,6 +2202,7 @@ adminRoutes.get(
         driverId: record.driverId,
         driverName: record.driver.user?.fullName ?? "Assigned driver",
         driverEmail: record.driver.user?.email ?? "",
+        payoutEmail: record.driver.payoutEmail ?? null,
         tripCount: record.tripCount,
         grossAmount: record.grossAmount,
         platformSharePercent: record.platformSharePercent,
