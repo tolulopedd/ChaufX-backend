@@ -47,6 +47,8 @@ const schema = z.object({
   DRIVER_SCHEDULED_LOCATION_FRESHNESS_MINUTES: z.coerce.number().int().min(30).max(1440).default(1440),
   CLIENT_APP_URL: z.string().url().default("http://localhost:3000"),
   API_PUBLIC_URL: z.string().url().default("http://localhost:4000"),
+  ENABLE_GUEST_BOOKING: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  GUEST_BOOKING_ACCESS_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(90),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("ChaufX <info@chaufx.ca>"),
   STRIPE_SECRET_KEY: z.string().optional(),

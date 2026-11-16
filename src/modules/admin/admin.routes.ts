@@ -1750,7 +1750,8 @@ adminRoutes.get(
           }
         },
         trip: true,
-        payment: true
+        payment: true,
+        guestBooking: true
       },
       orderBy: {
         scheduledStartAt: "desc"

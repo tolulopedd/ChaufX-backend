@@ -6,6 +6,7 @@ import { AppError } from "../../common/AppError.js";
 import { env } from "../../config/env.js";
 import { asyncHandler, paramValue } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
+import { sendTransactionalEmail } from "../../lib/email.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import {
   dispatchBookingToEligibleDrivers,
@@ -46,6 +47,31 @@ function getCheckoutBaseUrl() {
   return env.CLIENT_APP_URL.replace(/\/+$/, "");
 }
 
+/**
+ * Guest bookings do not have an authenticated customer inbox, so keep the
+ * payment outcome visible in the channel the guest supplied at checkout.
+ * Only notify on the first successful transition from a pending payment;
+ * Stripe may send the same event more than once and the confirmation page
+ * also synchronizes its session.
+ */
+function sendGuestPaymentSuccessEmail(bookingId: string, previousStatus: PaymentStatus | undefined, nextStatus: PaymentStatus) {
+  if (previousStatus !== PaymentStatus.PENDING || (nextStatus !== PaymentStatus.AUTHORIZED && nextStatus !== PaymentStatus.CAPTURED)) return;
+  void prisma.guestBooking.findUnique({ where: { bookingId } }).then((guestBooking) => {
+    if (!guestBooking) return;
+    const authorized = nextStatus === PaymentStatus.AUTHORIZED;
+    return sendTransactionalEmail({
+      to: guestBooking.email,
+      subject: authorized ? "Your ChaufX card is authorized — finding your driver" : "Your ChaufX payment is confirmed",
+      text: authorized
+        ? `Hello ${guestBooking.fullName}, your card has been authorized for your ChaufX booking. We are now finding your driver. You will only be charged after a driver accepts.`
+        : `Hello ${guestBooking.fullName}, your ChaufX payment is confirmed. We are now finding your driver.`,
+      html: authorized
+        ? `<p>Hello ${guestBooking.fullName},</p><p>Your card has been authorized for your ChaufX booking. We are now finding your driver.</p><p>You will only be charged after a driver accepts.</p>`
+        : `<p>Hello ${guestBooking.fullName},</p><p>Your ChaufX payment is confirmed. We are now finding your driver.</p>`
+    });
+  }).catch((error) => console.error("Unable to send guest payment-success email", error));
+}
+
 function getPublicApiBaseUrl(request?: Request) {
   const configuredUrl = new URL(env.API_PUBLIC_URL);
   const isLoopbackUrl = ["localhost", "127.0.0.1", "::1"].includes(configuredUrl.hostname);
@@ -71,7 +97,7 @@ function ensureStripeConfigured() {
   }
 }
 
-async function createStripeCheckoutSession(input: {
+export async function createStripeCheckoutSession(input: {
   bookingId: string;
   tripExtensionId?: string;
   amount: number;
@@ -448,6 +474,8 @@ export async function syncPaymentRecord(bookingId: string, sessionId: string) {
     }
   });
 
+  sendGuestPaymentSuccessEmail(bookingId, booking.payment?.status, nextStatus);
+
   if (isPaymentAuthorizedForDispatch(nextStatus)) {
     await dispatchBookingToEligibleDrivers(bookingId);
   }
@@ -481,6 +509,7 @@ async function synchronizePaymentIntent(intent: StripePaymentIntent) {
       recordedAt: status === PaymentStatus.CAPTURED ? payment.recordedAt ?? now : payment.recordedAt
     }
   });
+  sendGuestPaymentSuccessEmail(payment.bookingId, payment.status, status);
   if (isPaymentAuthorizedForDispatch(status)) await dispatchBookingToEligibleDrivers(payment.bookingId);
 }
 

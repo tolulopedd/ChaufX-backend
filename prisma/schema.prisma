@@ -250,6 +250,7 @@ model User {
   tripMessagesSent     TripMessage[]
   referralAttribution ReferralAttribution?
   contactMessageReplies ContactMessageReply[] @relation("ContactMessageReplyAuthor")
+  claimedGuestBookings  GuestBooking[]        @relation("GuestBookingClaimedBy")
 }
 
 model ReferralPartner {
@@ -614,11 +615,46 @@ model Booking {
   firstRidePromotionRedemption FirstRidePromotionRedemption?
   sourceOverageCharge CustomerOverageCharge?   @relation("SourceBookingOverage")
   appliedOverageCharges CustomerOverageCharge[] @relation("AppliedBookingOverage")
+  guestBooking     GuestBooking?
 
   @@index([status, scheduledStartAt])
   @@index([assignedDriverId, status])
   @@index([preferredDriverId])
   @@index([customerId, scheduledStartAt])
+}
+
+/// Stores the contact and secure-access data for a booking made without a
+/// ChaufX account.  The associated Booking still uses the same booking,
+/// pricing, payment and dispatch pipeline as a signed-in customer booking.
+model GuestBooking {
+  id                    String   @id @default(uuid())
+  bookingId             String   @unique
+  fullName              String
+  email                 String
+  phone                 String
+  accessTokenHash       String   @unique
+  accessTokenExpiresAt  DateTime
+  claimedAt             DateTime?
+  claimedByUserId       String?
+  utmSource             String?
+  utmMedium             String?
+  utmCampaign           String?
+  utmTerm               String?
+  utmContent            String?
+  landingPath           String?
+  setupConsentAt        DateTime?
+  stripeCustomerId      String?
+  stripePaymentMethodId String?
+  stripeSetupIntentId   String?  @unique
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  booking       Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  claimedByUser User?   @relation("GuestBookingClaimedBy", fields: [claimedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([email, createdAt])
+  @@index([claimedByUserId])
+  @@index([utmSource, utmCampaign])
 }
 
 model BookingDispatch {

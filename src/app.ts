@@ -28,6 +28,7 @@ import { contactMessageRoutes } from "./modules/contact-messages/contact-message
 import { tripMessagesRoutes } from "./modules/trip-messages/trip-messages.routes.js";
 import { errorMiddleware } from "./middleware/error.js";
 import { referralAdminRoutes } from "./modules/referrals/referral-admin.routes.js";
+import { guestBookingsRoutes } from "./modules/guest-bookings/guest-bookings.routes.js";
 
 export function createApp() {
   const app = express();
@@ -59,6 +60,7 @@ export function createApp() {
   app.use("/api", blogRoutes);
   app.use("/api", driverOnboardingRoutes);
   app.use("/api", contactMessageRoutes);
+  app.use("/api", guestBookingsRoutes);
   app.use("/api", usersRoutes);
   app.use("/api", driversRoutes);
   app.use("/api", bookingsRoutes);

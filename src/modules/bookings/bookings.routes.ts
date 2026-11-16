@@ -23,6 +23,7 @@ import { cancelStripePaymentIntent, captureStripePaymentIntent, expireStripeChec
 import { isPaymentCaptured } from "../payments/payment-status.js";
 import { env } from "../../config/env.js";
 import { releaseFirstRidePromotion } from "../promotions/first-ride-promotion.service.js";
+import { sendTransactionalEmail } from "../../lib/email.js";
 
 export const createBookingSchema = z.object({
   vehicleId: z.string().uuid().optional(),
@@ -813,6 +814,19 @@ bookingsRoutes.post(
         meta: { bookingId: booking.id }
       }
     ]);
+
+    const guestBooking = await prisma.guestBooking.findUnique({
+      where: { bookingId: booking.id },
+      select: { email: true, fullName: true }
+    });
+    if (guestBooking) {
+      void sendTransactionalEmail({
+        to: guestBooking.email,
+        subject: "ChaufX driver confirmed your booking",
+        text: `Hello ${guestBooking.fullName}, ${updatedBooking.assignedDriver?.user.fullName ?? "A ChaufX driver"} accepted your request. Your trip is confirmed.`,
+        html: `<p>Hello ${guestBooking.fullName},</p><p><strong>${updatedBooking.assignedDriver?.user.fullName ?? "A ChaufX driver"}</strong> accepted your ChaufX request. Your trip is confirmed.</p>`
+      }).catch((error) => console.error("Unable to send guest driver-assignment email", error));
+    }
 
     await createAuditLog({
       actorId: request.auth!.userId,
